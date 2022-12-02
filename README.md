@@ -1,6 +1,6 @@
 # FragPipe-Analyst
 
-FragPipe-Analyst is an easy-to-use, interactive web application developed to perform differential expression analysis with “one click” and to visualize quantitative proteomic datasets analyzed using [FragPipe] (https://fragpipe.nesvilab.org/) computational platform. It is compatible with the LFQ-MBR, TMT, and DIA quantification workflows in FragPipe. 
+FragPipe-Analyst is an easy-to-use, interactive web application developed to perform differential expression analysis with “one click” and to visualize quantitative proteomic datasets analyzed using [FragPipe](https://fragpipe.nesvilab.org/) computational proteomics platform. It is compatible with the LFQ-MBR, TMT, and DIA quantification workflows in FragPipe. 
 
 FragPipe-Analyst provides multiple useful analysis features, including Differential expression analysis using Limma, Enrichment analysis (GO/Pathways) using Enrich, 
 multiple options for missing value imputation. It provides rich data visualization capabilities, including PCA, volcano plots, sample correlation plots, heatmaps, missing value inspection, sample coverage, protein abundance plots for selected protein(s), plots for imputation effect evaluation, and more. The suer can also export results in table format for further analysis, such as DE results (FC and p-values), imputed data matrix (protein abundances after performing selected imputation method) and pathway enrichment results.
