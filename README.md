@@ -1,4 +1,4 @@
-# FragPipe-Analyst Forum
+# FragPipe-Analyst
 
 FragPipe-Analyst is the downstream analysis tool desgined for [FragPipe](https://fragpipe.nesvilab.org/). It's currently under beta test.
 This repo is intended to be used as a user forum for questions/suggestions/bug reports. For bug report, please make sure you provide enough details for reproducing the errors. If you feel more safe to share data via email, please email it to [yihsiao@umich.edu](yihsiao@umich.edu). 
