@@ -2,31 +2,12 @@
 
 FragPipe-Analyst is an easy-to-use, interactive web application developed to perform differential expression analysis with “one click” and to visualize quantitative proteomic datasets analyzed using [FragPipe] (https://fragpipe.nesvilab.org/) computational platform. It is compatible with the LFQ-MBR, TMT, and DIA quantification workflows in FragPipe. 
 
-## Features
-
-- Differential expression analysis
-- Enrichment analysis (GO/Pathways)
-- Imputation (optional)
-- Data visualization
-  1. PCA
-  2. Sample correlation
-  3. Heatmaps
-  4. Missing value inspection
-  5. Sample coverage
-  6. Protein intensity plots for slected protein(s)
-  7. Imputation effect evaluation
-
-- Report and multiple levels of exportable tables for further analysis
-  - Table options
-    - DE results
-    - Unimputed data matrix: Original protein intensities before imputation
-    - Imputed data matrix: Protein intensities after performing selected imputation method
-
+FragPipe-Analyst provides multiple useful analysis features, including Differential expression analysis using Limma, Enrichment analysis (GO/Pathways) using Enrich, 
+multiple options for missing value imputation. It provides rich data visualization capabilities, including PCA, volcano plots, sample correlation plots, heatmaps, missing value inspection, sample coverage, protein abundance plots for selected protein(s), plots for imputation effect evaluation, and more. The suer can also export results in table format for further analysis, such as DE results (FC and p-values), imputed data matrix (protein abundances after performing selected imputation method) and pathway enrichment results.
 
 ## Public Servers
-
 There are two server instances
-- Production (stable) server is available at [http://fragpipe-analyst.org] (http://fragpipe-analyst.org/).
+- Production (stable) server is available at [http://fragpipe-analyst.org](http://fragpipe-analyst.org/).
 - Development server is hosted at [http://fragpipe-analyst.nesvilab.org/](http://fragpipe-analyst.nesvilab.org/). It provides the most up to date version, including bug fixes, but may not be stable 
 
 ## Documentation, Questions, and Technical Support 
@@ -38,8 +19,8 @@ This repository is intended to provide documentation and a user forum for questi
 
 ## Source Code
 The source code of FragPipe-Analyst can be found [here](https://github.com/MonashProteomics/FragPipe-Analyst).
+The code is available under GNU General Public License v3.0
 
 ## Credits
-
 FragPipe-Analyst is based on the original LFQ-Analyst code developed by the Monash Proteomics and Metabolomics Facility & Monash Bioinformatics Platform, Monash University. FragPipe is being developed by the Nesvizhskii Lab (University of Michigan) in collaboration with the Monash University team (PI Ralf Schittenhelm).
 
