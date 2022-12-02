@@ -4,6 +4,8 @@ FragPipe-Analyst is the downstream analysis tool desgined for [FragPipe](https:/
 This repo is intended to be used as a user forum for questions/suggestions/bug reports. For bug report, please make sure you provide enough details for reproducing the errors. If you feel more safe to share data via email, please email it to [yihsiao@umich.edu](yihsiao@umich.edu). 
 
 - [Latest Documentation/Tutorials](https://github.com/MonashProteomics/FragPipe-Analyst/tree/main/docs)
+- [Questions/Suggestions](https://github.com/Nesvilab/FragPipe-Analyst/discussions)
+- [Bug Reports](https://github.com/Nesvilab/FragPipe-Analyst/issues)
 
 ## Public Servers
 
