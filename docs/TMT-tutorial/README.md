@@ -47,6 +47,7 @@ After you understand the input, you could upload those two files (`ccRCC_prot_ab
 ![heatmap](heatmap.png)
 
 3. **Protein plot**: Selecting a gene from the 'Results Table', A box plot or a violin plot will be shown comparing expression of that gene between conditions. 
+
 ![boxplot](boxplot.png)
 
 ## QC Plots (Bottom Left Panel)
@@ -55,23 +56,30 @@ After you understand the input, you could upload those two files (`ccRCC_prot_ab
     dataset. PC1, which is a linear combination of all features, shown on the x axis,  explains the most variation of the data, and followed by the rest of PCs. In brief, the more similar 2 samples are, the closer they cluster together. For further information, here are a few links, which explains the principals of PCAs: [Info](ttp://ordination.okstate.edu/PCA.htm) and [Basic
     introduction](http://setosa.io/ev/principal-component-analysis/)
 
-
     After PCA analysis with our sample data, samples are presented in the scatter plot below. Tumor and Normal samples are well separated by PC1 values. 
     
 ![PCA\_plot](PCA_condition.png)
+
 2. **Sample Correlation Plot**: A correlation matrix is plotted as a
     heatmap to visualize the Pearson correlation coefficients between
     the different samples.
+
 ![sample_correlation](sample_correlation.png)
-3. **Sample CVs Plots**: A plot representing distribution of protein level coefficient of variation for each condition. Each plot also contains a vertical line representing median CVs percentage within that condition. ![cv\_plot](CV.png)
+
+3. **Sample CVs Plots**: A plot representing distribution of protein level coefficient of variation for each condition. Each plot also contains a vertical line representing median CVs percentage within that condition.
+
+![cv\_plot](CV.png)
+
 4. **Protein Numbers**: A bar-plot representing number of proteins
     identified and quantified in each TMT plex.
+    
 ![proteins](protein_number.png)
 
 5. **Missing values- Heatmap**: To explore the pattern of missing
     values in the data, a heatmap is plotted indicating whether values
     are missing (0) or not (1). Only proteins with at least one missing
-    value are visualized. 
+    value are visualized.
+ 
 ![missing\_heatmap](missing_value.png)
 
 ## Enrichment Analysis (Bottom Right Panel)
