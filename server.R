@@ -1,6 +1,6 @@
 #Define server logic to read selected file ----
 server <- function(input, output, session) {
-  USE_LOCAL_ENRICHMENT <- T
+  USE_LOCAL_ENRICHMENT <- F
   options(shiny.maxRequestSize=100*1024^2)## Set maximum upload size to 100MB
   ENTRY_LIMIT <- 180000
 
