@@ -18,8 +18,8 @@ There are two server instances
 - [TMT](TMT-tutorial/README.md)
 
 ## Advanced Usage
-
-We recommend advanced users to use [FragPipeAnalystR](https://github.com/Nesvilab/FragPipeAnalystR) R package for further downstream analysis. It covers the same functionality as FragPipe-Analyst.
+- [GSEA](advanced.md): After getting differential expression analysis result from FragPipe-Analyst, users could perform Gene Set Enrichment Analysis (GSEA) by themselves easily.
+- We also recommend advanced users to use [FragPipeAnalystR](https://github.com/Nesvilab/FragPipeAnalystR) R package for further downstream analysis. It covers the same functionality as FragPipe-Analyst.
 
 ## Questions, and Technical Support 
 This repository is intended to provide documentation and a user forum for questions, suggestions, and bug reports. For bug report, please make sure you provide enough details for reproducing the errors. If you feel safer sharing data via email, please email it to [yihsiao@umich.edu](yihsiao@umich.edu). 
