@@ -32,5 +32,5 @@ The source code of FragPipe-Analyst can be found [here](https://github.com/Monas
 The code is available under GNU General Public License v3.0
 
 ## Credits
-FragPipe-Analyst is being developed by the Nesvizhskii Lab (University of Michigan) in collaboration with the Monash Proteomics and Metabolomics Facility & Monash Bioinformatics Platform, Monash University (PI Ralf Schittenhelm). FragPipe-Analyst is based on the original LFQ-Analyst code developed by the Monash University team.   
+FragPipe-Analyst is being developed by the [Nesvizhskii Lab](https://www.nesvilab.org/) (University of Michigan) in collaboration with the Monash Proteomics and Metabolomics Facility & Monash Bioinformatics Platform, Monash University (PI Ralf Schittenhelm). FragPipe-Analyst is based on the original LFQ-Analyst code developed by the Monash University team.   
 

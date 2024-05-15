@@ -11,7 +11,8 @@ To use FragPipe-Analyst, user needs to prepare two files. One is a quantificatio
 
 Here is an LFQ experiment of tumor (T) and normal (N) samples. It has three replicates for each tumor:
 
-In FragPipe
+In FragPipe:
+
 | file | experiment | replicate |
 |---------------------------------------------------------------------------------|---------|---|
 |/storage/yihsiao/data/PXD002612/convert/QEPlus07252014_16_37N_1_140729074952.mzML|Sample1	|	  |
@@ -27,7 +28,8 @@ In FragPipe
 |/storage/yihsiao/data/PXD002612/convert/QEPlus07252014_40_3T_2.mzML	            |Sample11	|   |
 |/storage/yihsiao/data/PXD002612/convert/QEPlus07252014_41_3T_3.mzML	            |Sample12 |	  |
 
-In FragPipe-Analyst, if user didn't change anything
+In FragPipe-Analyst, if user didn't change anything:
+
 | file | sample | sample_name | condition | replicate
 |---------------------------------------------------------------------------------|-------|-------|---|---|
 |/storage/yihsiao/data/PXD002612/convert/QEPlus07252014_16_37N_1_140729074952.mzML|Sample1| N37_1	| N | 1	|
