@@ -10,7 +10,7 @@ There are two server instances
 - Development server is hosted at [http://fragpipe-analyst.nesvilab.org/](http://fragpipe-analyst.nesvilab.org/). It provides the most up to date version, including bug fixes, but may not be stable 
 
 ## Quick Start
-- [Formatting input files](Formatting.md)
+- [Formatting input files and upload them for analysis](Formatting.md)
 - [Interpret the results](Interpretation.md)
 
 ## Tutorial
