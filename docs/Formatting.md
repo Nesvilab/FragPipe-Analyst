@@ -93,7 +93,7 @@ TMT_02s |130N   |CPT0023690003  |C3P-05111_T   | Tumor	   | 1
 TMT_02s |130C   |TPC0023710001  |C3L-00011_T_2 | Tumor	   | 2       
 TMT_02s |131N   |pool02         |pool02        | pool	     | 1       
 
-See [TMT tutorial](TMT.md) for more detailed analysis you could achieve through FragPipe-Analyst.
+See [TMT tutorial](TMT-tutorial/README.md) for more detailed analysis you could achieve through FragPipe-Analyst.
 
 # DIA
 
