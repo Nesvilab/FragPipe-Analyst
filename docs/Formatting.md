@@ -167,7 +167,7 @@ Before using FragPipe-Analyst, users need to annotate `condition` and `replicate
 
 ### Upload your files
 
-Once you have prepared your input files, you can following following steps to retrieve results:
+Once you have prepared your input files, you can follow instructions listed below to retrieve results:
 
 1. Go to FragPipe-Analyst website
 2. Click the Analysis button on the left
@@ -175,6 +175,7 @@ Once you have prepared your input files, you can following following steps to re
 - LFQ means data dependent label-free quantification
 4. Use file chooser to upload files you prepared earlier
 5. If you are using LFQ, choose the intensity type for the analysis
+6. Click the Run button
 
 Check [Interpretation](Interpretation.md) document to understand your results. 
 
