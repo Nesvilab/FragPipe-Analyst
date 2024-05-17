@@ -63,7 +63,7 @@ or the original dataset:
 4. **Feature Numbers**: A bar-plot representing number of proteins
     identified and quantified in each TMT plex.
     
-![proteins](proteins_plot.svg)
+![proteins](Proteins_plot.svg)
 
 5. **Missing values- Heatmap**: To explore the pattern of missing values in the data, a heatmap is plotted indicating whether values are missing (0) or not (1). Only proteins with at least one missing
     value are visualized.
