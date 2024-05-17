@@ -48,7 +48,7 @@ or the original dataset:
 1. **PCA plot**: A Principal Component Analysis(PCA) is a technique used to emphasize variation and bring out strong patterns in a dataset. PC1, which is a linear combination of all features, shown on the x axis,  explains the most variation of the data, and followed by the rest of PCs. In brief, the more similar 2 samples are, the closer they cluster together. For further information, here are a few links, which explains the principals of PCAs: [Info](ttp://ordination.okstate.edu/PCA.htm) and [Basic
     introduction](http://setosa.io/ev/principal-component-analysis/)
 
-    After PCA analysis with our sample data, samples are presented in the scatter plot below. Tumor and Normal samples are well separated by PC1 values. 
+    After plotting PCA with our sample data, samples are presented in the scatter plot below. As you can observed, CCND1 and control samples are separated by PC1 but one particular control seems to be quite different from others. 
     
 ![PCA](pca.png)
 
