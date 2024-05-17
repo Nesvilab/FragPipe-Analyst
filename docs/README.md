@@ -15,7 +15,8 @@ There are two server instances
 
 ## Tutorial
 
-- [TMT](TMT-tutorial/README.md)
+- [TMT](TMT-tutorial/README.md): An clear cell renal cell TMT experiment example
+- [LFQ](LFQ-AP-MS-tutorial/README.md): An LFQ AP-MS example
 
 ## Advanced Usage
 - [GSEA](advanced.md): After getting differential expression analysis result from FragPipe-Analyst, users could perform Gene Set Enrichment Analysis (GSEA) by themselves easily.
