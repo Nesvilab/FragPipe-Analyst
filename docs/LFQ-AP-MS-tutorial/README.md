@@ -74,18 +74,17 @@ or the original dataset:
 
 FragPipe-Analyst provides enrichment analysis for both Gene Ontology(GO) and pathways.
 
-1. **GO**: Selecting the comparison of interest, the GO database (Molecular Function/Cellular Component/Biological Process), and direction (up regulated or down regulated). It checks the differentially expressed (DE) list of genes against known sets of genes. The background gene list is composed with IDs appeared in the input data. A hypergeometric test is performed. Log odds ratio (log_odds) is calculated as `log2((IN/OUT)/(bg_IN/bg_OUT))`, where IN and OUT are the number of DE genes in and outside of a gene set of interest, and bg_IN and bg_OUT are the nubmer of other genes in and outside of a gene set of interest. Gene sets used are fetched from the [Enrichr](https://maayanlab.cloud/Enrichr/) API
-![GO](GO_term.png)
+1. **GO**: Selecting the comparison of interest, the GO database (Molecular Function/Cellular Component/Biological Process), and direction (up regulated or down regulated). It checks the differentially expressed (DE) list of genes against known sets of genes. The background gene list is composed with IDs appeared in the input data. A hypergeometric test is performed. Log odds ratio (log_odds) is calculated as `log2((IN/OUT)/(bg_IN/bg_OUT))`, where IN and OUT are the number of DE genes in and outside of a gene set of interest, and bg_IN and bg_OUT are the nubmer of other genes in and outside of a gene set of interest. Gene sets used are fetched from the [Enrichr](https://maayanlab.cloud/Enrichr/) API 
 
 1. **Pathway enrichment**: Same algorithm is used as the Gene Ontology part. Pathway database choices are Hallmark, KEGG and Reactome.
 
-Here shows some results after you clicked the "Run Enrichment"!
+Here shows some results after you clicked the "Run Enrichment" button:
 
-[Hallmak](hallmark_enrichment.png)
+![Hallmak](hallmark_enrichment.png)
 
-[KEGG](KEGG_enrichment.png)
+![KEGG](KEGG_enrichment.png)
 
-[GO MF Enrichment](GO_MF_enrichment.png)
+![GO MF Enrichment](GO_MF_enrichment.png)
 
 ## Result table
 
