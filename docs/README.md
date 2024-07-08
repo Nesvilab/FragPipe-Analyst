@@ -16,8 +16,9 @@ There are two server instances
 ## Tutorial
 
 - [TMT](TMT-tutorial/README.md): A clear cell renal cell carcinoma TMT experiment example from [CPTAC study](https://doi.org/10.1016/j.cell.2019.10.007) published in Cell.
-- [LFQ](LFQ-AP-MS-tutorial/README.md): An LFQ AP-MS example of head and neck cancer from [Swantey et al.](https://doi.org/10.1126%2Fscience.abf2911) published in Sceince.
-- [DIA](DIA-tutorial/README.md): A tutorial using subset of clear cell renal cell carcinoma data independent acquisition (DIA) experiment. It's the second part of the tutorial using collection of FragPipe softwares. You can also find the first part [here](DIA-tutorial/DIA.md).
+- [LFQ](LFQ-AP-MS-tutorial/README.md): An LFQ AP-MS example of head and neck cancer from [Swantey et al.](https://doi.org/10.1126%2Fscience.abf2911) published in Sceince. 
+- [DIA](DIA-tutorial/README.md): A tutorial using subset of clear cell renal cell carcinoma data independent acquisition (DIA) experiment. It's the second part of a tutorial using collection of FragPipe softwares for DIA analysis. You can also find the first part [here](DIA-tutorial/DIA.md).
+- [LFQ Hands-On Tutorial](LFQ-tutorial): An hands-on tutorial of analyzing a gliomas data-dependent label-free quantification (LFQ) dataset. It's the second part of a tutorial using collection of FragPipe softwares for LFQ analysis. You can find the first part [here](LFQ-tutorial/LFQ.md).
 
 ## Advanced Usage
 - [GSEA](advanced.md): After getting differential expression analysis result from FragPipe-Analyst, users could perform Gene Set Enrichment Analysis (GSEA) by themselves easily.
