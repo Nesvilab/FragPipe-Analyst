@@ -6,8 +6,8 @@ FragPipe-Analyst provides multiple useful analysis features, including different
 
 ## Public Servers
 There are two server instances
-- Production (stable) server is available at [https://fragpipe-analyst.org/](https://fragpipe-analyst.org/).
-- Development server is hosted at [http://fragpipe-analyst.nesvilab.org/](http://fragpipe-analyst.nesvilab.org/). It provides the most up to date version, including bug fixes, but may not be stable 
+- Production server is available at [https://fragpipe-analyst.org/](https://fragpipe-analyst.org/).
+- Development server is hosted at [http://fragpipe-analyst.nesvilab.org/](http://fragpipe-analyst.nesvilab.org/). It provides the most up to date version, including bug fixes. 
 
 ## Documentation, Questions, and Technical Support 
 This repository is intended to provide documentation and a user forum for questions, suggestions, and bug reports. For bug report, please make sure you provide enough details for reproducing the errors. If you feel safer sharing data via email, please email it to [yihsiao@umich.edu](yihsiao@umich.edu). 
