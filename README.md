@@ -20,6 +20,10 @@ This repository is intended to provide documentation and a user forum for questi
 The source code of FragPipe-Analyst can be found [here](https://github.com/MonashProteomics/FragPipe-Analyst).
 The code is available under GNU General Public License v3.0
 
+## Reference
+[Yi Hsiao, Haijian Zhang, Ginny Xiaohe Li, Yamei Deng, Fengchao Yu, Hossein Valipour Kahrood, Joel R. Steele, Ralf B. Schittenhelm, and Alexey I. Nesvizhskii
+Journal of Proteome Research (2024), DOI: 10.1021/acs.jproteome.4c00294](https://pubs.acs.org/doi/10.1021/acs.jproteome.4c00294)
+
 ## Credits
 FragPipe-Analyst is being developed by the Nesvizhskii Lab (University of Michigan) in collaboration with the Monash Proteomics and Metabolomics Facility & Monash Bioinformatics Platform, Monash University (PI Ralf Schittenhelm). FragPipe-Analyst is based on the original LFQ-Analyst code developed by the Monash University team.   
 
