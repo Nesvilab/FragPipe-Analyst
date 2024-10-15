@@ -26,7 +26,7 @@ Coefficient of variation plot shows distribution of protein level coefficient of
 
 ## Volcano Plot
 
-![Volcano Plot](Images/volcano_label.png)
+![Volcano Plot](Images/volcano_plot.png)
 
 Volcano plot is the most common used visualization for differentiatl expression analysis.
 
