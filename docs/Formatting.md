@@ -58,7 +58,7 @@ In FragPipe-Analyst, if user didn't change anything:
 
 - `sample` is from the `experiment` in FragPipe and used for matching samples. User should not change it.
 - `condition` is intially parsed from `experiment` in FragPipe, but users could change later.
-- `sample_name` is the same as `sample` (`experiment`) when FragPipe first generated it, but user could edit this as a way to update the visualization.
+- `sample_name` is the same as `sample` (`experiment`) when FragPipe first generated it, but user could edit this as a way to update the visualization. Values in the `sample_name` also couldn't be simply digits like `123` or `456`.
 - `replicate` will be automatically propagated based on what users specified in FragPipe.
 Note that since FragPipe-Analyst focus on differential expression analysis. You should have more than one condition available in the `condition` column like T/N or Tumor/NAT in the examples mentioned above.
 
