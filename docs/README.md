@@ -20,6 +20,11 @@ There are two server instances
 - [DIA](DIA-tutorial/README.md): A tutorial using subset of clear cell renal cell carcinoma data independent acquisition (DIA) experiment. It's the second part of a tutorial using collection of FragPipe softwares for DIA analysis. You can also find the first part [here](DIA-tutorial/DIA.md).
 - [LFQ Hands-On Tutorial](LFQ-tutorial): An hands-on tutorial of analyzing a gliomas data-dependent label-free quantification (LFQ) dataset. It's the second part of a tutorial using collection of FragPipe softwares for LFQ analysis. You can find the first part [here](LFQ-tutorial/LFQ.md).
 
+## Documentation
+Detailed information of functionalities are provided for each module
+
+- [Imputation](documentation/imputation.md)
+
 ## Advanced Usage
 - [GSEA](advanced.md): After getting differential expression analysis result from FragPipe-Analyst, users could perform Gene Set Enrichment Analysis (GSEA) by themselves easily.
 - We also recommend advanced users to use [FragPipeAnalystR](https://www.nesvilab.org/FragPipeAnalystR/) R package for further downstream analysis. It covers the same functionality as FragPipe-Analyst.
