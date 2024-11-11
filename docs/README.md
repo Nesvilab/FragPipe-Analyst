@@ -21,8 +21,8 @@ There are two server instances
 - [LFQ Hands-On Tutorial](LFQ-tutorial): An hands-on tutorial of analyzing a gliomas data-dependent label-free quantification (LFQ) dataset. It's the second part of a tutorial using collection of FragPipe softwares for LFQ analysis. You can find the first part [here](LFQ-tutorial/LFQ.md).
 
 ## Documentation
-Detailed information of functionalities are provided for each module
-
+Detailed information of functionalities are provided for each module. Readers are recommendated to read [our manuscript published in Journal of Proteome](https://pubs.acs.org/doi/10.1021/acs.jproteome.4c00294) first for the overview.
+- [Normalization](documentation/normalization.md)
 - [Imputation](documentation/imputation.md)
 
 ## Advanced Usage
@@ -34,6 +34,10 @@ This repository is intended to provide documentation and a user forum for questi
 
 - [Questions/Suggestions](https://github.com/Nesvilab/FragPipe-Analyst/discussions)
 - [Bug Reports](https://github.com/Nesvilab/FragPipe-Analyst/issues)
+
+## Reference
+[Yi Hsiao, Haijian Zhang, Ginny Xiaohe Li, Yamei Deng, Fengchao Yu, Hossein Valipour Kahrood, Joel R. Steele, Ralf B. Schittenhelm, and Alexey I. Nesvizhskii
+Journal of Proteome Research (2024), DOI: 10.1021/acs.jproteome.4c00294](https://pubs.acs.org/doi/10.1021/acs.jproteome.4c00294)
 
 ## Source Code
 The source code of FragPipe-Analyst can be found [here](https://github.com/MonashProteomics/FragPipe-Analyst).
