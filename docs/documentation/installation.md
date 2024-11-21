@@ -25,7 +25,7 @@ cd FragPipe-Analyst
 > shiny::runApp()
 ```
 
-### Instllation through Docker:
+### Installation through Docker:
 
 ``` sh
 # Clone the repository
