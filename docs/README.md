@@ -26,7 +26,6 @@ Detailed information of functionalities are provided for each module. Readers ar
 - [Imputation](documentation/imputation.md)
 
 ## Advanced Usage
-- [Source Code](https://github.com/MonashProteomics/FragPipe-Analyst): Source code is available under GNU General Public License v3.0.
 - [Installation](installation.md): Install your own copy on your computer or server
 - [GSEA](advanced.md): After getting differential expression analysis result from FragPipe-Analyst, users could perform Gene Set Enrichment Analysis (GSEA) by themselves easily.
 - We also recommend advanced users to use [FragPipeAnalystR](https://www.nesvilab.org/FragPipeAnalystR/) R package for further downstream analysis. It covers the same functionality as FragPipe-Analyst.
