@@ -2,7 +2,7 @@
 
 After processing data in FragPipe as mentioned in the [last part of the tutorial](LFQ.md), here we show how to further analyze the data using FragPipe-Analyst for downstream analysis and visualization (PCA, differential expression, etc.). 
 
-Just as a recap, a subset of a published gliomas dataset described by: https://pubmed.ncbi.nlm.nih.gov/36584682/ was used when running FragPipe.
+Just as a recap, a subset of a published gliomas dataset described by: [J. Bader et al.](https://pubmed.ncbi.nlm.nih.gov/36584682/) was used when running FragPipe.
 
 J. Bader et al. “Proteomics separates adult-type diffuse high-grade gliomas in metabolic subgroups independent of 1p/19q codeletion and across IDH mutational status”, Cell Rep Med 2023 4(1):100877. doi: 10.1016/j.xcrm.2022.100877. 
 
