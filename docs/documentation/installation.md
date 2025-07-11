@@ -12,7 +12,7 @@ Once all the prerequisites are installed, follow steps below to build and run th
 
 ``` sh
 # Clone the repository
-git clone https://github.com/MonashProteomics/FragPipe-Analys.git
+git clone https://github.com/MonashProteomics/FragPipe-Analyst.git
 
 # Move to the folder
 cd FragPipe-Analyst
