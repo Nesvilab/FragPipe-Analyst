@@ -2657,14 +2657,33 @@ plot_volcano_customized <- function(dep, contrast, label_size = 3, name_col = NU
   }
   df <- df_tmp %>% data.frame() %>% filter(!is.na(signif)) %>%
     arrange(signif)
-  
+
+  # Build dot colour category -----------------------------------------------
+  # When gene-set genes are being highlighted (selected non-NULL):
+  #   "selected"       -> orange  (gene-set member, any significance status)
+  #   "significant"    -> black   (DE but not in gene set)
+  #   "not_significant"-> grey    (not DE and not in gene set)
+  # Otherwise fall back to the standard two-level scheme.
+  has_selected <- !is.null(selected) && length(selected) > 0L
+  if (has_selected) {
+    df$dot_type <- ifelse(df$name %in% selected, "selected",
+                          ifelse(df$signif, "significant", "not_significant"))
+  } else {
+    df$dot_type <- ifelse(df$signif, "significant", "not_significant")
+  }
+
   name1 <- gsub("_vs_.*", "", contrast)
   name2 <- gsub(".*_vs_", "", contrast)
-  
+
   # Plot volcano with or without labels
+  # Non-selected dots first, then selected dots drawn on top as a separate layer
+  # so they are never covered by other points.
+  df_bg       <- if (has_selected) dplyr::filter(df, dot_type != "selected") else df
+  df_selected <- if (has_selected) dplyr::filter(df, dot_type == "selected") else df[0, ]
+
   p <- ggplot(df, aes(diff, p_values)) +
     geom_vline(xintercept = 0) +
-    geom_point(aes(col = signif)) +
+    geom_point(data = df_bg, aes(col = dot_type)) +
     geom_text(data = data.frame(), aes(x = c(Inf, -Inf),
                                        y = c(-Inf, -Inf),
                                        hjust = c(1, 0),
@@ -2676,24 +2695,35 @@ plot_volcano_customized <- function(dep, contrast, label_size = 3, name_col = NU
          x = expression(log[2]~"Fold change")) +
     theme_bw() +
     theme(legend.position = "none") +
-    scale_color_manual(values = c("TRUE" = "black", "FALSE" = "grey"))
-  if (add_names) {
-    if (!is.null(selected)) {
-      p <- p + ggrepel::geom_text_repel(data = filter(df, signif, !name %in% selected),
-                                        aes(label = name),
-                                        size = label_size,
-                                        box.padding = unit(0.1, 'lines'),
-                                        point.padding = unit(0.1, 'lines'),
-                                        segment.size = 0.5)
-    } else {
-      p <- p + ggrepel::geom_text_repel(data = filter(df, signif),
-                                        aes(label = name),
-                                        size = label_size,
-                                        box.padding = unit(0.1, 'lines'),
-                                        point.padding = unit(0.1, 'lines'),
-                                        segment.size = 0.5)
-    }
-
+    scale_color_manual(
+      values = c("selected"        = "#e74c3c",
+                 "significant"     = "black",
+                 "not_significant" = "grey")
+    )
+  # Draw selected dots on top (larger, red)
+  if (has_selected && nrow(df_selected) > 0) {
+    p <- p + geom_point(data = df_selected, aes(col = dot_type), size = 3)
+  }
+  if (has_selected) {
+    # When gene-set genes are highlighted: label only the selected genes
+    p <- p + ggrepel::geom_text_repel(
+      data          = dplyr::filter(df, name %in% selected),
+      aes(label     = name),
+      size          = label_size,
+      box.padding   = unit(0.1, 'lines'),
+      point.padding = unit(0.1, 'lines'),
+      segment.size  = 0.5
+    )
+  } else if (add_names) {
+    # Default behaviour: label all significant genes
+    p <- p + ggrepel::geom_text_repel(
+      data          = dplyr::filter(df, signif),
+      aes(label     = name),
+      size          = label_size,
+      box.padding   = unit(0.1, 'lines'),
+      point.padding = unit(0.1, 'lines'),
+      segment.size  = 0.5
+    )
   }
   if(adjusted) {
     p <- p + labs(y = expression(-log[10]~"Adjusted p-value"))

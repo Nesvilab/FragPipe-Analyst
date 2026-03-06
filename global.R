@@ -37,6 +37,8 @@ library(vegan)
 library(assertthat)
 library(RColorBrewer)
 library(data.table)
+library(visNetwork)
+library(GSVA)
 
 conflict_prefer("box", "shinydashboard")
 conflict_prefer("select", "dplyr")
@@ -55,3 +57,20 @@ source("R/tests.R")
 source("R/demo_functions.R")
 source("R/enrichment_functions.R")
 source("R/filter.R")
+source("R/knowledge_analysis.R")
+
+# --------------------------------------------------------------------------- #
+#  Load custom gene set collections from ./data/gene_sets/*.gmt at startup
+# --------------------------------------------------------------------------- #
+local({
+  dir <- file.path("data", "gene_sets")
+  if (!dir.exists(dir)) dir.create(dir, recursive = TRUE)
+  files <- list.files(dir, pattern = "\\.gmt$", full.names = TRUE, ignore.case = TRUE)
+  result <- if (length(files) > 0L) {
+    nms <- tools::file_path_sans_ext(basename(files))
+    setNames(lapply(files, read_gmt), nms)
+  } else {
+    list()
+  }
+  assign("LOADED_GMT_FILES", result, envir = .GlobalEnv)
+})

@@ -43,6 +43,7 @@ server <- function(input, output, session) {
       if (all(is.na(exp$replicate))) {
         showTab(inputId = "tab_panels", target = "quantification_panel")
         showTab(inputId="qc_tabBox", target="missingval_heatmap_tab")
+        showTab(inputId = "tab_panels", target = "kb_panel")
         updateTabsetPanel(session, "tab_panels", selected = "quantification_panel")
       } else {
         showTab(inputId = "tab_panels", target = "quantification_panel")
@@ -50,6 +51,7 @@ server <- function(input, output, session) {
         showTab(inputId="qc_tabBox", target="sample_coverage_tab")
         # make sure occ_panel visible after users updating their analysis
         showTab(inputId = "tab_panels", target = "occ_panel")
+        showTab(inputId = "tab_panels", target = "kb_panel")
         updateTabsetPanel(session, "tab_panels", selected = "quantification_panel")
       }
       shinyjs::show("venn_filter")
@@ -58,17 +60,20 @@ server <- function(input, output, session) {
       hideTab(inputId="qc_tabBox", target="sample_coverage_tab")
       showTab(inputId="qc_tabBox", target="missingval_heatmap_tab")
       showTab(inputId = "tab_panels", target = "quantification_panel")
+      showTab(inputId = "tab_panels", target = "kb_panel")
       updateTabsetPanel(session, "tab_panels", selected = "quantification_panel")
     } else if (input$exp == "DIA"){ # DIA
       showTab(inputId = "tab_panels", target = "occ_panel")
       showTab(inputId="qc_tabBox", target="sample_coverage_tab")
       showTab(inputId="qc_tabBox", target="missingval_heatmap_tab")
+      showTab(inputId = "tab_panels", target = "kb_panel")
       updateTabsetPanel(session, "tab_panels", selected = "quantification_panel")
       shinyjs::hide("venn_filter")
     } else if (input$exp %in% c("DIA-peptide", "DIA-site")) {
       hideTab(inputId = "tab_panels", target = "occ_panel")
       showTab(inputId="qc_tabBox", target="sample_coverage_tab")
       hideTab(inputId="qc_tabBox", target="missingval_heatmap_tab")
+      showTab(inputId = "tab_panels", target = "kb_panel")
       updateTabsetPanel(session, "tab_panels", selected = "quantification_panel")
       shinyjs::hide("venn_filter")
     } else if (input$exp %in% c("TMT-peptide", "TMT-site")) {
@@ -76,11 +81,13 @@ server <- function(input, output, session) {
       hideTab(inputId="qc_tabBox", target="missingval_heatmap_tab")
       hideTab(inputId="qc_tabBox", target="sample_coverage_tab")
       showTab(inputId = "tab_panels", target = "quantification_panel")
+      showTab(inputId = "tab_panels", target = "kb_panel")
       updateTabsetPanel(session, "tab_panels", selected = "quantification_panel")
     } else { # LFQ-peptide
       hideTab(inputId = "tab_panels", target = "occ_panel")
       hideTab(inputId="qc_tabBox", target="missingval_heatmap_tab")
       showTab(inputId="qc_tabBox", target="sample_coverage_tab")
+      showTab(inputId = "tab_panels", target = "kb_panel")
       updateTabsetPanel(session, "tab_panels", selected = "quantification_panel")
       shinyjs::hide("venn_filter")
     }
@@ -2821,4 +2828,410 @@ output$download_density_svg<-downloadHandler(
  #     # )
  #   }
  # )
+
+# ===========================================================================
+## KNOWLEDGE BASED ANALYSIS
+# ===========================================================================
+
+  # --- Dynamic contrast selector ---
+  output$kb_contrast_selector <- renderUI({
+    req(dep())
+    df   <- SummarizedExperiment::rowData(dep())
+    cols <- grep("_significant$", colnames(df))
+    selectizeInput("kb_contrast", "Comparison",
+                   choices = gsub("_significant", "", colnames(df)[cols]))
+  })
+
+  output$kb_volcano <- renderPlot({
+    kb_volcano_input()
+  })
+
+  observeEvent(input$kb_resetPlot, {
+    # Clear gene-set labels and DT row selection; restore default volcano labels
+    kb_labeled_genes(NULL)
+    DT::selectRows(kb_gs_table_proxy, NULL)
+    session$resetBrush("kb_protein_brush")
+  })
+
+  output$kb_downloadVolcano <- downloadHandler(
+    filename = function() paste0("Volcano_", input$kb_contrast, ".pdf"),
+    content  = function(file) {
+      pdf(file)
+      print(kb_volcano_input())
+      dev.off()
+    }
+  )
+
+  # ===========================================================================
+  # GENE SET EXPLORER
+  # ===========================================================================
+
+  # --- Database selector UI (built-in databases + any loaded GMT files) ---
+  output$kb_gs_database_ui <- renderUI({
+    builtin <- list(
+      "Built-in databases" = c(
+        "KEGG"                    = "KEGG",
+        "Reactome"                = "Reactome",
+        "WikiPathways"            = "WikiPathways",
+        "Hallmark"                = "Hallmark",
+        "GO - Molecular Function" = "MF",
+        "GO - Biological Process" = "BP",
+        "GO - Cellular Component" = "CC",
+        "KEGG (Mouse)"            = "KEGG (Mouse)",
+        "WikiPathways (Mouse)"    = "WikiPathways (Mouse)"
+      )
+    )
+    choices <- if (length(LOADED_GMT_FILES) > 0L) {
+      gmt_choices <- setNames(names(LOADED_GMT_FILES), names(LOADED_GMT_FILES))
+      c(builtin, list("Custom GMT files" = gmt_choices))
+    } else {
+      builtin
+    }
+    selectInput("kb_gs_database", "Database:", choices = choices)
+  })
+
+  # Cache: holds the full gene set collection for the currently selected database
+  kb_gs_collection_cache <- reactiveVal(list(db = NULL, data = NULL))
+
+  observeEvent(input$kb_gs_database, {
+    req(input$kb_gs_database)
+    db <- input$kb_gs_database
+
+    # Reset term selector immediately
+    updateSelectizeInput(session, "kb_gs_term", choices = character(0), server = TRUE)
+
+    if (db %in% names(LOADED_GMT_FILES)) {
+      gs   <- LOADED_GMT_FILES[[db]]
+      terms <- names(gs)
+      kb_gs_collection_cache(list(db = db, data = gs))
+      updateSelectizeInput(session, "kb_gs_term", choices = terms, server = TRUE)
+    } else {
+      # Fetch from msigdbr
+      id <- showNotification(paste0("Loading gene sets for: ", db, " …"),
+                             duration = NULL, type = "message")
+      on.exit(removeNotification(id), add = TRUE)
+      gs <- tryCatch(.get_msig_genesets(db), error = function(e) NULL)
+      if (!is.null(gs)) {
+        kb_gs_collection_cache(list(db = db, data = gs))
+        updateSelectizeInput(session, "kb_gs_term", choices = names(gs), server = TRUE)
+      } else {
+        showNotification("Failed to load gene sets.", type = "error")
+      }
+    }
+  })
+
+  # Genes for the currently selected term
+  kb_gs_genes <- reactive({
+    req(input$kb_gs_term, nchar(input$kb_gs_term) > 0L)
+    cache <- kb_gs_collection_cache()
+    if (!is.null(cache$data)) cache$data[[input$kb_gs_term]] else character(0L)
+  })
+
+  # Gene table (multi-row selectable so user can pick which genes to label)
+  output$kb_gs_table <- DT::renderDataTable({
+    genes <- tryCatch(kb_gs_genes(), error = function(e) character(0L))
+    validate(need(length(genes) > 0L, "Select a database and gene set above."))
+    data.frame("Gene symbol" = genes, check.names = FALSE)
+  }, options   = list(pageLength = 10, dom = "ftp", scrollY = "250px"),
+     selection = "multiple",
+     rownames  = FALSE)
+
+  # Proxy for programmatic row selection
+  kb_gs_table_proxy <- DT::dataTableProxy("kb_gs_table")
+
+  # "Select All" button: select every row currently in the table
+  observeEvent(input$kb_select_all, {
+    genes <- tryCatch(kb_gs_genes(), error = function(e) character(0L))
+    DT::selectRows(kb_gs_table_proxy, seq_len(length(genes)))
+  })
+
+  # "Cancel All" button: clear all selected rows
+  observeEvent(input$kb_cancel_all, {
+    DT::selectRows(kb_gs_table_proxy, NULL)
+  })
+
+  # Stores which gene symbols to highlight (set only when "Label genes" clicked)
+  kb_labeled_genes <- reactiveVal(NULL)
+
+  # Clear labels whenever the user picks a different gene set term
+  observeEvent(input$kb_gs_term, {
+    kb_labeled_genes(NULL)
+    DT::selectRows(kb_gs_table_proxy, NULL)
+  }, ignoreInit = TRUE)
+
+  # "Label genes" button: freeze the current row selection into kb_labeled_genes
+  observeEvent(input$kb_label_genes, {
+    genes        <- tryCatch(kb_gs_genes(), error = function(e) character(0L))
+    selected_rows <- isolate(input$kb_gs_table_rows_selected)
+    if (length(selected_rows) > 0L && length(genes) > 0L) {
+      kb_labeled_genes(genes[selected_rows])
+    } else {
+      kb_labeled_genes(NULL)
+    }
+  })
+
+  # ===========================================================================
+  # VOLCANO (gene-set labelling driven by kb_labeled_genes)
+  # ===========================================================================
+
+  kb_volcano_input <- reactive({
+    req(dep(), input$kb_contrast)
+
+    # Map stored gene symbols → protein 'name' identifiers in rowData
+    selected_ids <- tryCatch({
+      genes <- kb_labeled_genes()
+      if (!is.null(genes) && length(genes) > 0L) {
+        rd <- as.data.frame(SummarizedExperiment::rowData(dep()))
+        if ("Gene" %in% colnames(rd)) {
+          rd$name[rd$Gene %in% genes]
+        } else {
+          syms <- gsub("[.].*", "", rd$name)
+          rd$name[syms %in% genes]
+        }
+      } else {
+        NULL
+      }
+    }, error = function(e) NULL)
+
+    plot_volcano_customized(
+      dep(),
+      contrast   = input$kb_contrast,
+      label_size = input$kb_fontsize,
+      add_names  = input$kb_check_names,
+      adjusted   = input$kb_p_adj,
+      lfc        = input$kb_lfc,
+      alpha      = input$kb_alpha,
+      show_gene  = input$kb_show_gene,
+      selected   = selected_ids
+    )
+  })
+
+  # ===========================================================================
+  # ORA PATHWAY HEATMAP  (rows = terms, cols = contrasts)
+  # ===========================================================================
+
+  # Database selector: built-in + any loaded GMT files
+  output$kb_ora_database_ui <- renderUI({
+    builtin <- list(
+      "Built-in databases" = c(
+        "KEGG"                    = "KEGG",
+        "Reactome"                = "Reactome",
+        "WikiPathways"            = "WikiPathways",
+        "Hallmark"                = "Hallmark",
+        "GO - Molecular Function" = "MF",
+        "GO - Biological Process" = "BP",
+        "GO - Cellular Component" = "CC",
+        "KEGG (Mouse)"            = "KEGG (Mouse)",
+        "WikiPathways (Mouse)"    = "WikiPathways (Mouse)"
+      )
+    )
+    choices <- if (length(LOADED_GMT_FILES) > 0L) {
+      gmt_choices <- setNames(names(LOADED_GMT_FILES), names(LOADED_GMT_FILES))
+      c(builtin, list("Custom GMT files" = gmt_choices))
+    } else {
+      builtin
+    }
+    selectInput("kb_ora_database", "Pathway database:", choices = choices,
+                selected = "KEGG")
+  })
+
+  # Control condition selector (mirrors PPI panel logic)
+  output$kb_ora_control_ui <- renderUI({
+    req(dep())
+    cd <- as.data.frame(SummarizedExperiment::colData(dep()))
+    cond_col <- if ("condition" %in% colnames(cd)) "condition" else colnames(cd)[1]
+    conds <- sort(unique(as.character(cd[[cond_col]])))
+    selectInput("kb_ora_control", "Control condition:", choices = conds)
+  })
+
+  # Filtered contrast selector: only bait_vs_<control>
+  output$kb_ora_contrast_ui <- renderUI({
+    req(dep(), input$kb_ora_control)
+    rd <- as.data.frame(SummarizedExperiment::rowData(dep()))
+    all_contrasts <- gsub("_significant$", "",
+                          grep("_significant$", colnames(rd), value = TRUE))
+    ctrl <- input$kb_ora_control
+    filtered <- all_contrasts[grepl(paste0("_vs_", ctrl, "$"), all_contrasts)]
+    if (length(filtered) == 0) filtered <- all_contrasts
+    checkboxGroupInput("kb_ora_contrasts", "Comparisons to include:",
+                       choices = filtered, selected = filtered)
+  })
+
+  # Spinner shown immediately after "Run ORA" is clicked
+  output$kb_ora_heatmap_ui <- renderUI({
+    req(input$kb_run_ora)
+    shinycssloaders::withSpinner(
+      plotOutput("kb_ora_heatmap", height = 520), color = "#3c8dbc")
+  })
+
+  observeEvent(input$kb_run_ora, {
+    output$kb_ora_heatmap <- renderPlot({
+      req(dep(), input$kb_ora_database)
+
+      sel_contrasts <- if (!is.null(input$kb_ora_contrasts) &&
+                           length(input$kb_ora_contrasts) > 0)
+        input$kb_ora_contrasts else NULL
+
+      notify_id <- showNotification(
+        paste0("Running ORA for selected contrasts (", input$kb_ora_database, ") …"),
+        duration = NULL, type = "message"
+      )
+      on.exit(removeNotification(notify_id), add = TRUE)
+
+      ora_res <- tryCatch(
+        run_ora_kb(dep(), database = input$kb_ora_database,
+                   alpha = input$kb_ora_alpha,
+                   selected_contrasts = sel_contrasts),
+        error = function(e) {
+          showNotification(paste0("ORA failed: ", e$message),
+                           type = "error", duration = 8)
+          NULL
+        }
+      )
+
+      validate(need(!is.null(ora_res) && nrow(ora_res) > 0,
+                    "ORA returned no results. Try a different database or p-value cutoff."))
+
+      tryCatch({
+        hm <- plot_ora_heatmap(
+          ora_results = ora_res,
+          top_n       = input$kb_ora_top_n,
+          value_type  = input$kb_ora_value_type,
+          alpha       = input$kb_ora_alpha
+        )
+        ComplexHeatmap::draw(hm)
+      }, error = function(e) {
+        ggplot2::ggplot() +
+          ggplot2::annotate("text", x = 0.5, y = 0.5, size = 5,
+                            label = paste0("ORA heatmap error:\n", e$message)) +
+          ggplot2::theme_void()
+      })
+    })
+  })
+
+  # ===========================================================================
+  # GSVA PATHWAY HEATMAP
+  # ===========================================================================
+
+  # Own database selector for GSVA (independent of Gene Set Explorer)
+  output$kb_gsva_database_ui <- renderUI({
+    builtin <- list(
+      "Built-in databases" = c(
+        "KEGG"                    = "KEGG",
+        "Reactome"                = "Reactome",
+        "WikiPathways"            = "WikiPathways",
+        "Hallmark"                = "Hallmark",
+        "GO - Molecular Function" = "MF",
+        "GO - Biological Process" = "BP",
+        "GO - Cellular Component" = "CC",
+        "KEGG (Mouse)"            = "KEGG (Mouse)",
+        "WikiPathways (Mouse)"    = "WikiPathways (Mouse)"
+      )
+    )
+    choices <- if (length(LOADED_GMT_FILES) > 0L) {
+      gmt_choices <- setNames(names(LOADED_GMT_FILES), names(LOADED_GMT_FILES))
+      c(builtin, list("Custom GMT files" = gmt_choices))
+    } else {
+      builtin
+    }
+    selectInput("kb_gsva_database", "Pathway database:", choices = choices,
+                selected = "Hallmark")
+  })
+
+  output$kb_heatmap_ui <- renderUI({
+    req(input$kb_run_gsva)
+    shinycssloaders::withSpinner(
+      plotOutput("kb_pathway_heatmap", height = 520), color = "#3c8dbc")
+  })
+
+  observeEvent(input$kb_run_gsva, {
+    output$kb_pathway_heatmap <- renderPlot({
+      req(dep(), input$kb_gsva_database)
+      db <- input$kb_gsva_database
+      # For GMT files pass gene sets directly; for built-in let the function fetch
+      gs <- if (db %in% names(LOADED_GMT_FILES)) LOADED_GMT_FILES[[db]] else NULL
+      tryCatch({
+        hm <- plot_gsva_heatmap(
+          dep(),
+          database           = db,
+          gene_sets          = gs,
+          top_n              = input$kb_gsva_top_n,
+          order_by_condition = input$kb_order_by_condition
+        )
+        ComplexHeatmap::draw(hm)
+      }, error = function(e) {
+        ggplot2::ggplot() +
+          ggplot2::annotate("text", x = 0.5, y = 0.5, size = 5,
+                            label = paste0("GSVA error:\n", conditionMessage(e)),
+                            hjust = 0.5) +
+          ggplot2::theme_void()
+      })
+    })
+  })
+
+  # ===========================================================================
+  # NETWORK ANALYSIS
+  # ===========================================================================
+
+  # --- PPI: control condition selector (populated from colData) ---
+  output$kb_ppi_control_ui <- renderUI({
+    req(dep())
+    conditions <- unique(SummarizedExperiment::colData(dep())$condition)
+    selectInput("kb_ppi_control", "Control condition:", choices = conditions)
+  })
+
+  # --- PPI: contrast selector filtered to those comparing vs the chosen control ---
+  output$kb_ppi_contrast_ui <- renderUI({
+    req(dep(), input$kb_ppi_control)
+    rd           <- as.data.frame(SummarizedExperiment::rowData(dep()))
+    all_contrasts <- gsub("_significant$", "",
+                          grep("_significant$", colnames(rd), value = TRUE))
+    ctrl          <- input$kb_ppi_control
+    # Contrasts are "GroupA_vs_GroupB"; keep those where GroupB == control
+    filtered <- all_contrasts[grepl(paste0("_vs_", ctrl, "$"), all_contrasts)]
+    if (length(filtered) == 0) filtered <- all_contrasts   # fallback: show all
+    selectInput("kb_ppi_contrast", "Comparison (bait vs control):",
+                choices = filtered)
+  })
+
+  # --- PPI network output ---
+  output$kb_ppi_ui <- renderUI({
+    req(input$kb_run_ppi)
+    shinycssloaders::withSpinner(
+      visNetwork::visNetworkOutput("kb_ppi_network", height = "420px"),
+      color = "#3c8dbc")
+  })
+
+  observeEvent(input$kb_run_ppi, {
+    output$kb_ppi_network <- visNetwork::renderVisNetwork({
+      req(input$kb_ppi_contrast)
+      plot_ppi_network(
+        dep           = dep(),
+        contrast      = input$kb_ppi_contrast,
+        lfc_threshold = input$kb_ppi_lfc,
+        alpha         = input$kb_ppi_alpha,
+        string_score  = input$kb_ppi_score
+      )
+    })
+  })
+
+  # --- KEGG pathway network ---
+  output$kb_pathway_net_ui <- renderUI({
+    req(input$kb_run_pathway_net)
+    shinycssloaders::withSpinner(
+      visNetwork::visNetworkOutput("kb_pathway_network", height = "420px"),
+      color = "#3c8dbc")
+  })
+
+  observeEvent(input$kb_run_pathway_net, {
+    output$kb_pathway_network <- visNetwork::renderVisNetwork({
+      req(input$kb_kegg_pathway_id, nchar(trimws(input$kb_kegg_pathway_id)) > 0)
+      plot_kegg_pathway_network(
+        pathway_id = trimws(input$kb_kegg_pathway_id),
+        dep        = dep(),
+        contrast   = input$kb_contrast
+      )
+    })
+  })
+
 }

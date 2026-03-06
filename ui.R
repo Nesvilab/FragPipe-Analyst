@@ -773,11 +773,221 @@ ui <- function(request){shinyUI(
                    ) # Venn plot column closed
                  ) # fuildRow closed
               )  # occurrence panel closed
+            ,
+            # ============================================================
+            ## KNOWLEDGE BASED ANALYSIS panel
+            # ============================================================
+            tabPanel("Knowledge Based Analysis",
+                     value = "kb_panel",
+                     br(),
+
+              # --- Row 1: Volcano + Gene Set Explorer ---
+              fluidRow(
+                box(title = "Volcano Plot", width = 6,
+                  # Volcano controls
+                  fluidRow(
+                    column(6, uiOutput("kb_contrast_selector")),
+                    column(3, numericInput("kb_fontsize", "Font size",
+                                          min = 0, max = 8, value = 4)),
+                    column(3,
+                      shinyWidgets::dropdownButton(
+                        circle = TRUE, status = "default", right = TRUE,
+                        icon   = icon("sliders"), width = "260px",
+                        numericInput("kb_lfc",   "LFC cutoff",
+                                     min = 0, max = 10, value = 1, step = 0.5),
+                        numericInput("kb_alpha", "p-value cutoff",
+                                     min = 0, max = 1,  value = 0.05, step = 0.01),
+                        tooltip = tooltipOptions(placement = "left",
+                                                 title = "Threshold settings")
+                      )
+                    )
+                  ),
+                  fluidRow(
+                    column(4, checkboxInput("kb_check_names", "Display names",     value = TRUE)),
+                    column(4, checkboxInput("kb_p_adj",       "Adjusted p values", value = TRUE)),
+                    column(4, checkboxInput("kb_show_gene",   "Show gene names",   value = TRUE))
+                  ),
+                  shinycssloaders::withSpinner(
+                    plotOutput("kb_volcano", height = 430,
+                               brush = brushOpts(id = "kb_protein_brush", resetOnNew = TRUE)),
+                    color = "#3c8dbc"
+                  ),
+                  downloadButton("kb_downloadVolcano", "Save Plot"),
+                  actionButton("kb_resetPlot", "Clear Selection")
+                ),
+
+                # === Gene Set Explorer (replaces ORA dot plot) ===
+                box(title = "Gene Set Explorer", width = 6,
+                  fluidRow(
+                    column(12, uiOutput("kb_gs_database_ui"))
+                  ),
+                  fluidRow(
+                    column(12,
+                      selectizeInput("kb_gs_term", "Gene Set:",
+                        choices = NULL,
+                        options = list(
+                          placeholder     = "Select a database first \u2192",
+                          maxOptions      = 2000,
+                          onInitialize    = I('function() { this.setValue(""); }')
+                        )
+                      )
+                    )
+                  ),
+                  # Button row: row selection helpers + label trigger
+                  fluidRow(
+                    column(7,
+                      tags$small(style = "color:#777; line-height:2.2;",
+                        icon("circle-info"),
+                        " Select rows below, then click \u201cLabel genes\u201d."
+                      )
+                    ),
+                    column(5, style = "text-align:right; padding-top:4px;",
+                      actionButton("kb_select_all",   "Select All",
+                                   class = "btn-xs btn-default"),
+                      tags$span(" "),
+                      actionButton("kb_cancel_all",   "Cancel All",
+                                   class = "btn-xs btn-default"),
+                      tags$span(" "),
+                      actionButton("kb_label_genes",  "Label genes",
+                                   class = "btn-xs btn-primary",
+                                   icon  = icon("tag"))
+                    )
+                  ),
+                  br(),
+                  DT::dataTableOutput("kb_gs_table")
+                )
+              ),
+
+              # --- Row 2: ORA Pathway Heatmap (left) + GSVA Pathway Heatmap (right) ---
+              fluidRow(
+                # === ORA Pathway Heatmap ===
+                box(title = "ORA Pathway Heatmap", width = 6,
+                  fluidRow(
+                    column(12, uiOutput("kb_ora_database_ui"))
+                  ),
+                  fluidRow(
+                    column(6, uiOutput("kb_ora_control_ui")),
+                    column(6, uiOutput("kb_ora_contrast_ui"))
+                  ),
+                  fluidRow(
+                    column(4,
+                      sliderInput("kb_ora_top_n", "Top N terms",
+                                  min = 5, max = 100, value = 30, step = 5),
+                      tags$small(style = "color:#888;",
+                        "ranked by min p-value across contrasts")
+                    ),
+                    column(4,
+                      selectInput("kb_ora_value_type", "Heatmap value:",
+                                  choices = c(
+                                    "log2 Odds Ratio"  = "log2OR",
+                                    "p-value (-log10)" = "pvalue",
+                                    "Size (hit count)" = "size"
+                                  ),
+                                  selected = "log2OR")
+                    ),
+                    column(4,
+                      numericInput("kb_ora_alpha", "p cutoff",
+                                   min = 0, max = 1, value = 0.05, step = 0.01)
+                    )
+                  ),
+                  fluidRow(
+                    column(12,
+                      actionButton("kb_run_ora", "Run ORA",
+                                   class = "btn-primary btn-block")
+                    )
+                  ),
+                  uiOutput("kb_ora_heatmap_ui")
+                ),
+
+                # === GSVA Pathway Heatmap ===
+                box(title = "GSVA Pathway Heatmap", width = 6,
+                  fluidRow(
+                    column(12, uiOutput("kb_gsva_database_ui"))
+                  ),
+                  fluidRow(
+                    column(5,
+                      sliderInput("kb_gsva_top_n", "Top N pathways",
+                                  min = 5, max = 100, value = 25, step = 5),
+                      tags$small(style = "color:#888;",
+                        "ranked by score variance across samples")
+                    ),
+                    column(4,
+                      checkboxInput("kb_order_by_condition",
+                                    "Order by condition",
+                                    value = TRUE)
+                    ),
+                    column(3,
+                      br(),
+                      actionButton("kb_run_gsva", "Run GSVA",
+                                   class = "btn-warning btn-block")
+                    )
+                  ),
+                  uiOutput("kb_heatmap_ui")
+                )
+              ),
+
+              # --- Row 3: Network Analysis ---
+              fluidRow(
+                box(title = "Network Analysis", width = 6,
+                  tabsetPanel(
+
+                    # ---- PPI Network tab ----
+                    tabPanel("PPI Network",
+                      br(),
+                      # AP-MS: select the control condition; app filters contrasts
+                      fluidRow(
+                        column(6, uiOutput("kb_ppi_control_ui")),
+                        column(6, uiOutput("kb_ppi_contrast_ui"))
+                      ),
+                      fluidRow(
+                        column(4,
+                          numericInput("kb_ppi_score", "STRING score",
+                                       min = 0, max = 1000, value = 400, step = 50)
+                        ),
+                        column(4,
+                          numericInput("kb_ppi_lfc", "LFC cutoff",
+                                       min = 0, max = 10, value = 1, step = 0.5)
+                        ),
+                        column(4,
+                          numericInput("kb_ppi_alpha", "p cutoff",
+                                       min = 0, max = 1, value = 0.05, step = 0.01)
+                        )
+                      ),
+                      fluidRow(
+                        column(12,
+                          actionButton("kb_run_ppi", "Fetch PPI",
+                                       class = "btn-info btn-block")
+                        )
+                      ),
+                      uiOutput("kb_ppi_ui")
+                    ),
+
+                    # ---- KEGG Pathway Network tab ----
+                    tabPanel("KEGG Pathway",
+                      br(),
+                      fluidRow(
+                        column(8,
+                          textInput("kb_kegg_pathway_id", "KEGG pathway ID:",
+                                    placeholder = "e.g. hsa04010")
+                        ),
+                        column(4, br(),
+                          actionButton("kb_run_pathway_net", "Fetch Pathway",
+                                       class = "btn-info btn-sm")
+                        )
+                      ),
+                      uiOutput("kb_pathway_net_ui")
+                    )
+
+                  ) # tabsetPanel close
+                )
+              )
+            ) # kb_panel close
+
             ) # panel_list close
           ) # div close
       #bookmarkButton()
         )), #analysis tab close
-      
+
       tabItem(tabName = "info",
               fluidRow( 
                box(
