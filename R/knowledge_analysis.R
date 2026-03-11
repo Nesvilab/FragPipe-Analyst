@@ -296,11 +296,14 @@ plot_ora_heatmap <- function(ora_results, top_n = 30,
 
 #' Run ORA across all contrasts — built-in databases or custom GMT files
 #'
-#' @param dep      SummarizedExperiment after test_diff()
-#' @param database Database name (built-in or GMT collection name)
-#' @param alpha    p-value threshold for the foreground gene list
+#' @param dep               SummarizedExperiment after test_diff()
+#' @param database          Database name (built-in or GMT collection name)
+#' @param alpha             p-value threshold for the foreground gene list
+#' @param selected_contrasts Optional character vector of contrast names to keep
+#' @param backend           "clusterProfiler" (default) or "enrichr"
 #' @return data.frame compatible with \code{plot_ora_heatmap()}
-run_ora_kb <- function(dep, database, alpha = 0.05, selected_contrasts = NULL) {
+run_ora_kb <- function(dep, database, alpha = 0.05, selected_contrasts = NULL,
+                       backend = "clusterProfiler") {
   loaded_gmt <- tryCatch(
     get("LOADED_GMT_FILES", envir = .GlobalEnv, inherits = FALSE),
     error = function(e) list()
@@ -312,12 +315,56 @@ run_ora_kb <- function(dep, database, alpha = 0.05, selected_contrasts = NULL) {
   } else {
     res <- test_ora_mod(dep, databases = database, contrasts = TRUE,
                         direction = "UP", log2_threshold = 0,
-                        alpha = alpha, adjust_alpha = FALSE)
+                        alpha = alpha, adjust_alpha = FALSE,
+                        backend = backend)
     if (!is.null(selected_contrasts) && length(selected_contrasts) > 0 &&
         "contrast" %in% colnames(res))
       res <- dplyr::filter(res, contrast %in% selected_contrasts)
     res
   }
+}
+
+#' Pre-compute ORA across every built-in database and loaded GMT file
+#'
+#' Called when the Knowledge Based Analysis tab is first entered (or on
+#' manual refresh).  Returns a named list where each element is the ORA
+#' result data.frame (or NULL on failure) for that database.
+#'
+#' @param dep      SummarizedExperiment after test_diff()
+#' @param alpha    p-value threshold for foreground gene selection
+#' @param backend  "clusterProfiler" or "enrichr"
+#' @param progress Optional shiny Progress object; incremented after each db
+#' @return Named list: database_name -> data.frame | NULL
+run_ora_kb_all <- function(dep, alpha = 0.05, backend = "clusterProfiler",
+                           progress = NULL) {
+  builtin_dbs <- c("KEGG", "Reactome", "WikiPathways", "Hallmark",
+                   "MF", "BP", "CC")
+  loaded_gmt  <- tryCatch(
+    get("LOADED_GMT_FILES", envir = .GlobalEnv, inherits = FALSE),
+    error = function(e) list()
+  )
+  all_dbs <- c(builtin_dbs, names(loaded_gmt))
+  n       <- length(all_dbs)
+
+  results <- setNames(vector("list", n), all_dbs)
+  t_total <- proc.time()[["elapsed"]]
+  for (i in seq_along(all_dbs)) {
+    db <- all_dbs[[i]]
+    if (!is.null(progress))
+      progress$inc(1 / n, detail = paste("Running", db, "\u2026"))
+    t0 <- proc.time()[["elapsed"]]
+    results[[db]] <- tryCatch(
+      suppressWarnings(suppressMessages(
+        run_ora_kb(dep, database = db, alpha = alpha, backend = backend)
+      )),
+      error = function(e) { message("ORA skipped [", db, "]: ", e$message); NULL }
+    )
+    t1 <- proc.time()[["elapsed"]]
+    nrows <- if (!is.null(results[[db]])) nrow(results[[db]]) else 0L
+    message(sprintf("[ORA] %-20s %6.1fs  (%d results)", db, t1 - t0, nrows))
+  }
+  message(sprintf("[ORA] TOTAL %43.1fs", proc.time()[["elapsed"]] - t_total))
+  results
 }
 
 

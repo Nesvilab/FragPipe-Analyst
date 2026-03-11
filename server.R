@@ -2847,8 +2847,7 @@ output$download_density_svg<-downloadHandler(
   })
 
   observeEvent(input$kb_resetPlot, {
-    # Clear gene-set labels and DT row selection; restore default volcano labels
-    kb_labeled_genes(NULL)
+    # Clear gene-set table selection and reset volcano to default labels
     DT::selectRows(kb_gs_table_proxy, NULL)
     session$resetBrush("kb_protein_brush")
   })
@@ -2866,7 +2865,10 @@ output$download_density_svg<-downloadHandler(
   # GENE SET EXPLORER
   # ===========================================================================
 
-  # --- Database selector UI (built-in databases + any loaded GMT files) ---
+  # Up to 5 highlight colors for multi-set volcano
+  KB_GS_COLORS <- c("#e74c3c", "#3498db", "#2ecc71", "#f39c12", "#9b59b6")
+
+  # --- Database selector UI ---
   output$kb_gs_database_ui <- renderUI({
     builtin <- list(
       "Built-in databases" = c(
@@ -2890,125 +2892,234 @@ output$download_density_svg<-downloadHandler(
     selectInput("kb_gs_database", "Database:", choices = choices)
   })
 
-  # Cache: holds the full gene set collection for the currently selected database
+  # --- Contrast selector: populated from ORA cache ---
+  output$kb_gs_contrast_ui <- renderUI({
+    cache <- kb_ora_cache()
+    db    <- input$kb_gs_database
+    if (!is.null(db) && length(cache) > 0L && db %in% names(cache) &&
+        !is.null(cache[[db]]) && "contrast" %in% colnames(cache[[db]])) {
+      cts <- sort(unique(cache[[db]]$contrast))
+    } else {
+      req(dep())
+      rd  <- as.data.frame(SummarizedExperiment::rowData(dep()))
+      cts <- gsub("_significant$", "",
+                  grep("_significant$", colnames(rd), value = TRUE))
+    }
+    selectInput("kb_gs_contrast", "Contrast:", choices = cts)
+  })
+
+  # Cache: full gene set collection for volcano labeling
   kb_gs_collection_cache <- reactiveVal(list(db = NULL, data = NULL))
 
   observeEvent(input$kb_gs_database, {
     req(input$kb_gs_database)
     db <- input$kb_gs_database
-
-    # Reset term selector immediately
-    updateSelectizeInput(session, "kb_gs_term", choices = character(0), server = TRUE)
-
     if (db %in% names(LOADED_GMT_FILES)) {
-      gs   <- LOADED_GMT_FILES[[db]]
-      terms <- names(gs)
-      kb_gs_collection_cache(list(db = db, data = gs))
-      updateSelectizeInput(session, "kb_gs_term", choices = terms, server = TRUE)
+      kb_gs_collection_cache(list(db = db, data = LOADED_GMT_FILES[[db]]))
     } else {
-      # Fetch from msigdbr
-      id <- showNotification(paste0("Loading gene sets for: ", db, " …"),
+      id <- showNotification(paste0("Loading gene sets for: ", db, " \u2026"),
                              duration = NULL, type = "message")
       on.exit(removeNotification(id), add = TRUE)
       gs <- tryCatch(.get_msig_genesets(db), error = function(e) NULL)
       if (!is.null(gs)) {
         kb_gs_collection_cache(list(db = db, data = gs))
-        updateSelectizeInput(session, "kb_gs_term", choices = names(gs), server = TRUE)
       } else {
         showNotification("Failed to load gene sets.", type = "error")
       }
     }
   })
 
-  # Genes for the currently selected term
-  kb_gs_genes <- reactive({
-    req(input$kb_gs_term, nchar(input$kb_gs_term) > 0L)
-    cache <- kb_gs_collection_cache()
-    if (!is.null(cache$data)) cache$data[[input$kb_gs_term]] else character(0L)
+  # Filtered table data: ORA results for selected db + contrast + p cutoff
+  kb_gs_table_data <- reactive({
+    cache <- kb_ora_cache()
+    db    <- input$kb_gs_database
+    ct    <- input$kb_gs_contrast
+    pcut  <- input$kb_gs_pvalue_filter
+
+    validate(need(length(cache) > 0L,
+      "ORA not yet computed \u2014 navigate to this tab after running DE analysis."))
+    validate(need(!is.null(db) && db %in% names(cache) && !is.null(cache[[db]]),
+      paste0("No ORA results for '", db, "'. Try Refresh ORA.")))
+
+    res <- cache[[db]]
+    if (!is.null(ct) && ct != "" && "contrast" %in% colnames(res))
+      res <- dplyr::filter(res, contrast == ct)
+    if (!is.null(pcut) && "p_hyper" %in% colnames(res))
+      res <- dplyr::filter(res, p_hyper <= pcut)
+
+    # Select and rename columns for display
+    cols <- intersect(
+      c("Term", "bg_IN", "IN", "geneID", "log_odds", "p_hyper", "p.adjust_hyper"),
+      colnames(res)
+    )
+    res <- res[, cols, drop = FALSE]
+    rename_map <- c(Term           = "Gene Set",
+                    bg_IN          = "Size",
+                    IN             = "Overlap",
+                    geneID         = "Overlapping Genes",
+                    log_odds       = "log2 OR",
+                    p_hyper        = "p-value",
+                    p.adjust_hyper = "adj. p-value")
+    colnames(res) <- rename_map[colnames(res)]
+    res
   })
 
-  # Gene table (multi-row selectable so user can pick which genes to label)
+  # Gene set table: multi-row selectable, built-in DT search
   output$kb_gs_table <- DT::renderDataTable({
-    genes <- tryCatch(kb_gs_genes(), error = function(e) character(0L))
-    validate(need(length(genes) > 0L, "Select a database and gene set above."))
-    data.frame("Gene symbol" = genes, check.names = FALSE)
-  }, options   = list(pageLength = 10, dom = "ftp", scrollY = "250px"),
-     selection = "multiple",
-     rownames  = FALSE)
+    df <- tryCatch(kb_gs_table_data(), error = function(e) {
+      validate(need(FALSE, conditionMessage(e)))
+    })
+    num_cols <- intersect(c("log2 OR", "p-value", "adj. p-value"), colnames(df))
+    overlap_idx <- which(colnames(df) == "Overlapping Genes") - 1L
 
-  # Proxy for programmatic row selection
+    DT::datatable(
+      df,
+      selection = list(mode = "multiple", selected = NULL),
+      rownames  = FALSE,
+      filter    = "none",
+      options   = list(
+        pageLength = 10,
+        scrollX    = TRUE,
+        scrollY    = "280px",
+        dom        = "ftp",
+        columnDefs = list(
+          list(
+            targets = overlap_idx,
+            render  = DT::JS("function(data,type,row){
+              if(type==='display'&&data&&data.length>45)
+                return '<span title=\"'+data+'\">'+data.substr(0,45)+'\u2026</span>';
+              return data||'';}")
+          )
+        )
+      )
+    ) %>%
+      DT::formatRound(columns = num_cols, digits = 4)
+  })
+
+  # Proxy for clearing row selection programmatically
   kb_gs_table_proxy <- DT::dataTableProxy("kb_gs_table")
 
-  # "Select All" button: select every row currently in the table
-  observeEvent(input$kb_select_all, {
-    genes <- tryCatch(kb_gs_genes(), error = function(e) character(0L))
-    DT::selectRows(kb_gs_table_proxy, seq_len(length(genes)))
-  })
-
-  # "Cancel All" button: clear all selected rows
-  observeEvent(input$kb_cancel_all, {
-    DT::selectRows(kb_gs_table_proxy, NULL)
-  })
-
-  # Stores which gene symbols to highlight (set only when "Label genes" clicked)
-  kb_labeled_genes <- reactiveVal(NULL)
-
-  # Clear labels whenever the user picks a different gene set term
-  observeEvent(input$kb_gs_term, {
-    kb_labeled_genes(NULL)
-    DT::selectRows(kb_gs_table_proxy, NULL)
-  }, ignoreInit = TRUE)
-
-  # "Label genes" button: freeze the current row selection into kb_labeled_genes
-  observeEvent(input$kb_label_genes, {
-    genes        <- tryCatch(kb_gs_genes(), error = function(e) character(0L))
-    selected_rows <- isolate(input$kb_gs_table_rows_selected)
-    if (length(selected_rows) > 0L && length(genes) > 0L) {
-      kb_labeled_genes(genes[selected_rows])
-    } else {
-      kb_labeled_genes(NULL)
-    }
+  # Color legend strip showing which color maps to which selected gene set
+  output$kb_gs_color_legend <- renderUI({
+    sel <- input$kb_gs_table_rows_selected
+    if (is.null(sel) || length(sel) == 0L) return(NULL)
+    tbl <- tryCatch(kb_gs_table_data(), error = function(e) NULL)
+    if (is.null(tbl) || !"Gene Set" %in% colnames(tbl)) return(NULL)
+    rows <- head(sel, 5L)
+    set_names <- tbl[["Gene Set"]][rows]
+    colors    <- KB_GS_COLORS[seq_along(rows)]
+    items <- mapply(function(nm, col) {
+      short <- if (nchar(nm) > 50) paste0(substr(nm, 1, 47), "...") else nm
+      tags$span(style = paste0("margin-right:12px; white-space:nowrap;"),
+        tags$span(style = paste0(
+          "display:inline-block; width:12px; height:12px; ",
+          "border-radius:2px; margin-right:4px; vertical-align:middle; ",
+          "background-color:", col, ";")),
+        tags$span(style = "font-size:12px; vertical-align:middle;", short)
+      )
+    }, set_names, colors, SIMPLIFY = FALSE)
+    tags$div(style = "padding: 4px 0 6px 0; line-height: 1.8;", items)
   })
 
   # ===========================================================================
-  # VOLCANO (gene-set labelling driven by kb_labeled_genes)
+  # VOLCANO (multi-set gene highlighting from table row selection)
   # ===========================================================================
 
   kb_volcano_input <- reactive({
     req(dep(), input$kb_contrast)
 
-    # Map stored gene symbols → protein 'name' identifiers in rowData
-    selected_ids <- tryCatch({
-      genes <- kb_labeled_genes()
-      if (!is.null(genes) && length(genes) > 0L) {
-        rd <- as.data.frame(SummarizedExperiment::rowData(dep()))
-        if ("Gene" %in% colnames(rd)) {
-          rd$name[rd$Gene %in% genes]
-        } else {
-          syms <- gsub("[.].*", "", rd$name)
-          rd$name[syms %in% genes]
-        }
-      } else {
-        NULL
+    selected_rows <- input$kb_gs_table_rows_selected
+    gene_set_list <- NULL
+
+    if (!is.null(selected_rows) && length(selected_rows) > 0L) {
+      rows      <- head(selected_rows, 5L)   # cap at 5 sets
+      tbl       <- tryCatch(kb_gs_table_data(), error = function(e) NULL)
+      col_cache <- kb_gs_collection_cache()
+
+      if (!is.null(tbl) && "Gene Set" %in% colnames(tbl)) {
+        set_names_sel <- tbl[["Gene Set"]][rows]
+        overlap_genes <- if ("Overlapping Genes" %in% colnames(tbl))
+          tbl[["Overlapping Genes"]][rows] else rep(NA_character_, length(rows))
+        gene_set_list <- setNames(
+          lapply(seq_along(set_names_sel), function(i) {
+            nm <- set_names_sel[i]
+            genes <- if (!is.null(col_cache$data)) col_cache$data[[nm]] else NULL
+            if (is.null(genes) || length(genes) == 0L) {
+              # Fallback: use overlapping genes from ORA results (slash-separated)
+              gid <- overlap_genes[i]
+              if (!is.na(gid) && nchar(gid) > 0L)
+                genes <- strsplit(gid, "/")[[1]]
+            }
+            if (is.null(genes)) return(character(0L))
+            genes
+          }),
+          set_names_sel
+        )
+        # Drop empty sets
+        gene_set_list <- Filter(function(x) length(x) > 0L, gene_set_list)
+        if (length(gene_set_list) == 0L) gene_set_list <- NULL
       }
-    }, error = function(e) NULL)
+    }
 
     plot_volcano_customized(
       dep(),
-      contrast   = input$kb_contrast,
-      label_size = input$kb_fontsize,
-      add_names  = input$kb_check_names,
-      adjusted   = input$kb_p_adj,
-      lfc        = input$kb_lfc,
-      alpha      = input$kb_alpha,
-      show_gene  = input$kb_show_gene,
-      selected   = selected_ids
+      contrast        = input$kb_contrast,
+      label_size      = input$kb_fontsize,
+      add_names       = input$kb_check_names,
+      adjusted        = input$kb_p_adj,
+      lfc             = input$kb_lfc,
+      alpha           = input$kb_alpha,
+      show_gene       = input$kb_show_gene,
+      gene_set_list   = gene_set_list,
+      gene_set_colors = if (!is.null(gene_set_list))
+        KB_GS_COLORS[seq_along(gene_set_list)] else NULL
     )
   })
 
   # ===========================================================================
   # ORA PATHWAY HEATMAP  (rows = terms, cols = contrasts)
   # ===========================================================================
+
+  # Cache: named list database -> result data.frame (NULL = failed/skipped)
+  kb_ora_cache <- reactiveVal(list())
+
+  # Invalidate cache whenever the DE result changes
+  observeEvent(dep(), { kb_ora_cache(list()) })
+
+  # Local helper: run ORA for all databases and populate the cache
+  .run_kb_ora_precompute <- function() {
+    req(dep())
+    alpha   <- isolate(input$kb_ora_alpha)
+    backend <- isolate(input$kb_ora_backend)
+    if (is.null(alpha))   alpha   <- 0.05
+    if (is.null(backend)) backend <- "clusterProfiler"
+
+    withProgress(
+      message = paste0("Pre-computing ORA (", backend, ") …"),
+      value = 0,
+      {
+        results <- run_ora_kb_all(dep(), alpha = alpha, backend = backend,
+                                  progress = list(inc = function(amount, detail = NULL) {
+                                    incProgress(amount, detail = detail)
+                                  }))
+      }
+    )
+    kb_ora_cache(results)
+  }
+
+  # Trigger pre-computation when the KB tab is first entered
+  observeEvent(input$tab_panels, {
+    req(input$tab_panels == "kb_panel", dep())
+    if (length(kb_ora_cache()) > 0L) return()   # already computed for this dep()
+    .run_kb_ora_precompute()
+  })
+
+  # Manual refresh (re-runs with current alpha / backend settings)
+  observeEvent(input$kb_refresh_ora, {
+    req(dep())
+    kb_ora_cache(list())
+    .run_kb_ora_precompute()
+  })
 
   # Database selector: built-in + any loaded GMT files
   output$kb_ora_database_ui <- renderUI({
@@ -3035,6 +3146,22 @@ output$download_density_svg<-downloadHandler(
                 selected = "KEGG")
   })
 
+  # Status badge: idle / computing / ready
+  output$kb_ora_status_ui <- renderUI({
+    cache <- kb_ora_cache()
+    if (length(cache) == 0L) {
+      tags$p(style = "color:#888; margin-top:8px;",
+             icon("clock-o"), " ORA not yet computed.")
+    } else {
+      n_ok   <- sum(vapply(cache, function(x) !is.null(x) && nrow(x) > 0, logical(1)))
+      n_fail <- length(cache) - n_ok
+      msg    <- paste0(n_ok, " databases ready")
+      if (n_fail > 0) msg <- paste0(msg, ", ", n_fail, " skipped")
+      tags$p(style = "color:#27ae60; margin-top:8px;",
+             icon("check-circle"), " ", msg)
+    }
+  })
+
   # Control condition selector (mirrors PPI panel logic)
   output$kb_ora_control_ui <- renderUI({
     req(dep())
@@ -3057,55 +3184,46 @@ output$download_density_svg<-downloadHandler(
                        choices = filtered, selected = filtered)
   })
 
-  # Spinner shown immediately after "Run ORA" is clicked
+  # Heatmap UI: placeholder until cache is ready
   output$kb_ora_heatmap_ui <- renderUI({
-    req(input$kb_run_ora)
+    cache <- kb_ora_cache()
+    db    <- input$kb_ora_database
+    if (is.null(db) || length(cache) == 0L || !db %in% names(cache)) return(NULL)
     shinycssloaders::withSpinner(
       plotOutput("kb_ora_heatmap", height = 520), color = "#3c8dbc")
   })
 
-  observeEvent(input$kb_run_ora, {
-    output$kb_ora_heatmap <- renderPlot({
-      req(dep(), input$kb_ora_database)
+  # Heatmap plot: reactive on cache + controls (no button needed)
+  output$kb_ora_heatmap <- renderPlot({
+    cache <- kb_ora_cache()
+    req(cache, input$kb_ora_database)
 
-      sel_contrasts <- if (!is.null(input$kb_ora_contrasts) &&
-                           length(input$kb_ora_contrasts) > 0)
-        input$kb_ora_contrasts else NULL
+    ora_res <- cache[[input$kb_ora_database]]
+    validate(need(!is.null(ora_res) && nrow(ora_res) > 0,
+                  "No ORA results for this database. Try Refresh ORA or a different database."))
 
-      notify_id <- showNotification(
-        paste0("Running ORA for selected contrasts (", input$kb_ora_database, ") …"),
-        duration = NULL, type = "message"
+    # Apply contrast filter (control condition selection)
+    sel_contrasts <- input$kb_ora_contrasts
+    if (!is.null(sel_contrasts) && length(sel_contrasts) > 0 &&
+        "contrast" %in% colnames(ora_res))
+      ora_res <- dplyr::filter(ora_res, contrast %in% sel_contrasts)
+
+    validate(need(nrow(ora_res) > 0,
+                  "No results after filtering contrasts. Adjust the control condition selection."))
+
+    tryCatch({
+      hm <- plot_ora_heatmap(
+        ora_results = ora_res,
+        top_n       = input$kb_ora_top_n,
+        value_type  = input$kb_ora_value_type,
+        alpha       = input$kb_ora_alpha
       )
-      on.exit(removeNotification(notify_id), add = TRUE)
-
-      ora_res <- tryCatch(
-        run_ora_kb(dep(), database = input$kb_ora_database,
-                   alpha = input$kb_ora_alpha,
-                   selected_contrasts = sel_contrasts),
-        error = function(e) {
-          showNotification(paste0("ORA failed: ", e$message),
-                           type = "error", duration = 8)
-          NULL
-        }
-      )
-
-      validate(need(!is.null(ora_res) && nrow(ora_res) > 0,
-                    "ORA returned no results. Try a different database or p-value cutoff."))
-
-      tryCatch({
-        hm <- plot_ora_heatmap(
-          ora_results = ora_res,
-          top_n       = input$kb_ora_top_n,
-          value_type  = input$kb_ora_value_type,
-          alpha       = input$kb_ora_alpha
-        )
-        ComplexHeatmap::draw(hm)
-      }, error = function(e) {
-        ggplot2::ggplot() +
-          ggplot2::annotate("text", x = 0.5, y = 0.5, size = 5,
-                            label = paste0("ORA heatmap error:\n", e$message)) +
-          ggplot2::theme_void()
-      })
+      ComplexHeatmap::draw(hm)
+    }, error = function(e) {
+      ggplot2::ggplot() +
+        ggplot2::annotate("text", x = 0.5, y = 0.5, size = 5,
+                          label = paste0("ORA heatmap error:\n", e$message)) +
+        ggplot2::theme_void()
     })
   })
 

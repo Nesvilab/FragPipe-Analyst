@@ -816,44 +816,28 @@ ui <- function(request){shinyUI(
                   actionButton("kb_resetPlot", "Clear Selection")
                 ),
 
-                # === Gene Set Explorer (replaces ORA dot plot) ===
+                # === Gene Set Explorer ===
                 box(title = "Gene Set Explorer", width = 6,
                   fluidRow(
-                    column(12, uiOutput("kb_gs_database_ui"))
+                    column(6, uiOutput("kb_gs_database_ui")),
+                    column(6, uiOutput("kb_gs_contrast_ui"))
                   ),
                   fluidRow(
-                    column(12,
-                      selectizeInput("kb_gs_term", "Gene Set:",
-                        choices = NULL,
-                        options = list(
-                          placeholder     = "Select a database first \u2192",
-                          maxOptions      = 2000,
-                          onInitialize    = I('function() { this.setValue(""); }')
+                    column(6,
+                      numericInput("kb_gs_pvalue_filter", "p-value filter",
+                                   min = 0, max = 1, value = 0.05, step = 0.01)
+                    ),
+                    column(6,
+                      tags$div(style = "margin-top: 26px;",
+                        tags$small(style = "color: #888;",
+                          icon("info-circle"),
+                          " Select up to 5 gene sets. Each set is colored",
+                          " differently on the volcano plot."
                         )
                       )
                     )
                   ),
-                  # Button row: row selection helpers + label trigger
-                  fluidRow(
-                    column(7,
-                      tags$small(style = "color:#777; line-height:2.2;",
-                        icon("circle-info"),
-                        " Select rows below, then click \u201cLabel genes\u201d."
-                      )
-                    ),
-                    column(5, style = "text-align:right; padding-top:4px;",
-                      actionButton("kb_select_all",   "Select All",
-                                   class = "btn-xs btn-default"),
-                      tags$span(" "),
-                      actionButton("kb_cancel_all",   "Cancel All",
-                                   class = "btn-xs btn-default"),
-                      tags$span(" "),
-                      actionButton("kb_label_genes",  "Label genes",
-                                   class = "btn-xs btn-primary",
-                                   icon  = icon("tag"))
-                    )
-                  ),
-                  br(),
+                  uiOutput("kb_gs_color_legend"),
                   DT::dataTableOutput("kb_gs_table")
                 )
               ),
@@ -863,7 +847,13 @@ ui <- function(request){shinyUI(
                 # === ORA Pathway Heatmap ===
                 box(title = "ORA Pathway Heatmap", width = 6,
                   fluidRow(
-                    column(12, uiOutput("kb_ora_database_ui"))
+                    column(8, uiOutput("kb_ora_database_ui")),
+                    column(4,
+                      radioButtons("kb_ora_backend", "Backend:",
+                                   choices = c("clusterProfiler" = "clusterProfiler",
+                                               "Enrichr (online)" = "enrichr"),
+                                   selected = "clusterProfiler")
+                    )
                   ),
                   fluidRow(
                     column(6, uiOutput("kb_ora_control_ui")),
@@ -891,9 +881,11 @@ ui <- function(request){shinyUI(
                     )
                   ),
                   fluidRow(
-                    column(12,
-                      actionButton("kb_run_ora", "Run ORA",
-                                   class = "btn-primary btn-block")
+                    column(8, uiOutput("kb_ora_status_ui")),
+                    column(4,
+                      actionButton("kb_refresh_ora", "Refresh ORA",
+                                   class = "btn-warning btn-block",
+                                   icon = icon("refresh"))
                     )
                   ),
                   uiOutput("kb_ora_heatmap_ui")

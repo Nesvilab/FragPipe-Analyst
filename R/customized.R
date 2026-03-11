@@ -2478,8 +2478,9 @@ plot_feature <- function(dep, protein, type, id="ID", show_gene = F){
 }
 
 plot_volcano_customized <- function(dep, contrast, label_size = 3, name_col = NULL,
-                             add_names = TRUE, adjusted = T, lfc = 1, alpha = 0.05, 
-                             plot = TRUE, show_gene = F, selected = NULL) {
+                             add_names = TRUE, adjusted = T, lfc = 1, alpha = 0.05,
+                             plot = TRUE, show_gene = F, selected = NULL,
+                             gene_set_list = NULL, gene_set_colors = NULL) {
   # Show error if inputs are not the required classes
   if(is.integer(label_size)) label_size <- as.numeric(label_size)
   assertthat::assert_that(inherits(dep, "SummarizedExperiment"),
@@ -2659,31 +2660,61 @@ plot_volcano_customized <- function(dep, contrast, label_size = 3, name_col = NU
     arrange(signif)
 
   # Build dot colour category -----------------------------------------------
-  # When gene-set genes are being highlighted (selected non-NULL):
-  #   "selected"       -> orange  (gene-set member, any significance status)
-  #   "significant"    -> black   (DE but not in gene set)
-  #   "not_significant"-> grey    (not DE and not in gene set)
-  # Otherwise fall back to the standard two-level scheme.
-  has_selected <- !is.null(selected) && length(selected) > 0L
-  if (has_selected) {
-    df$dot_type <- ifelse(df$name %in% selected, "selected",
-                          ifelse(df$signif, "significant", "not_significant"))
+  # Priority (highest to lowest):
+  #   gene_set_list  -> named list (color -> gene symbols); up to 5 sets,
+  #                     each set gets its own colour; first set wins overlaps
+  #   selected       -> legacy single-set highlight (red "#e74c3c")
+  #   default        -> "significant" = black, "not_significant" = grey
+
+  has_sets     <- !is.null(gene_set_list) && length(gene_set_list) > 0L
+  has_selected <- !is.null(selected)      && length(selected) > 0L
+
+  if (has_sets) {
+    # Assign background categories first, then overwrite per set (reverse order
+    # so that set 1 wins over set 2 on overlapping genes).
+    # Truncate long set labels for display
+    set_labels <- names(gene_set_list)
+    set_labels_short <- ifelse(nchar(set_labels) > 40,
+                               paste0(substr(set_labels, 1, 37), "..."),
+                               set_labels)
+    if (is.null(gene_set_colors))
+      gene_set_colors <- c("#e74c3c", "#3498db", "#2ecc71",
+                           "#f39c12", "#9b59b6")[seq_along(gene_set_list)]
+    df$dot_color <- ifelse(df$signif, "significant", "not_significant")
+    for (i in rev(seq_along(gene_set_list))) {
+      df$dot_color[df$name %in% gene_set_list[[i]]] <- set_labels_short[i]
+    }
+    all_color_values <- c("significant"     = "black",
+                          "not_significant" = "grey",
+                          setNames(gene_set_colors, set_labels_short))
+    df_bg  <- dplyr::filter(df, dot_color %in% c("significant", "not_significant"))
+    df_set <- dplyr::filter(df, !dot_color %in% c("significant", "not_significant"))
+    all_set_genes <- unique(unlist(gene_set_list, use.names = FALSE))
+  } else if (has_selected) {
+    df$dot_color <- ifelse(df$name %in% selected, "#e74c3c",
+                           ifelse(df$signif, "significant", "not_significant"))
+    all_color_values <- c("significant"     = "black",
+                          "not_significant" = "grey",
+                          "#e74c3c"         = "#e74c3c")
+    df_bg  <- dplyr::filter(df, dot_color != "#e74c3c")
+    df_set <- dplyr::filter(df, dot_color == "#e74c3c")
+    all_set_genes <- selected
   } else {
-    df$dot_type <- ifelse(df$signif, "significant", "not_significant")
+    df$dot_color     <- ifelse(df$signif, "significant", "not_significant")
+    all_color_values <- c("significant"     = "black",
+                          "not_significant" = "grey")
+    df_bg  <- df
+    df_set <- df[0L, ]
+    all_set_genes <- character(0L)
   }
 
   name1 <- gsub("_vs_.*", "", contrast)
   name2 <- gsub(".*_vs_", "", contrast)
 
-  # Plot volcano with or without labels
-  # Non-selected dots first, then selected dots drawn on top as a separate layer
-  # so they are never covered by other points.
-  df_bg       <- if (has_selected) dplyr::filter(df, dot_type != "selected") else df
-  df_selected <- if (has_selected) dplyr::filter(df, dot_type == "selected") else df[0, ]
-
+  # Background dots first, set-member dots on top (so they are never hidden).
   p <- ggplot(df, aes(diff, p_values)) +
     geom_vline(xintercept = 0) +
-    geom_point(data = df_bg, aes(col = dot_type)) +
+    geom_point(data = df_bg, aes(col = dot_color)) +
     geom_text(data = data.frame(), aes(x = c(Inf, -Inf),
                                        y = c(-Inf, -Inf),
                                        hjust = c(1, 0),
@@ -2694,20 +2725,25 @@ plot_volcano_customized <- function(dep, contrast, label_size = 3, name_col = NU
     labs(title = contrast,
          x = expression(log[2]~"Fold change")) +
     theme_bw() +
-    theme(legend.position = "none") +
-    scale_color_manual(
-      values = c("selected"        = "#e74c3c",
-                 "significant"     = "black",
-                 "not_significant" = "grey")
-    )
-  # Draw selected dots on top (larger, red)
-  if (has_selected && nrow(df_selected) > 0) {
-    p <- p + geom_point(data = df_selected, aes(col = dot_type), size = 3)
+    scale_color_manual(values = all_color_values,
+                       breaks = if (has_sets) setdiff(names(all_color_values),
+                         c("significant", "not_significant")) else c()) +
+    if (has_sets) {
+      theme(legend.position = "bottom",
+            legend.title    = element_blank(),
+            legend.text     = element_text(size = 9))
+    } else {
+      theme(legend.position = "none")
+    }
+
+  if (nrow(df_set) > 0L) {
+    p <- p + geom_point(data = df_set, aes(col = dot_color), size = 3)
   }
-  if (has_selected) {
-    # When gene-set genes are highlighted: label only the selected genes
+
+  if (length(all_set_genes) > 0L) {
+    # Label all genes belonging to any highlighted gene set
     p <- p + ggrepel::geom_text_repel(
-      data          = dplyr::filter(df, name %in% selected),
+      data          = dplyr::filter(df, name %in% all_set_genes),
       aes(label     = name),
       size          = label_size,
       box.padding   = unit(0.1, 'lines'),
@@ -2715,7 +2751,7 @@ plot_volcano_customized <- function(dep, contrast, label_size = 3, name_col = NU
       segment.size  = 0.5
     )
   } else if (add_names) {
-    # Default behaviour: label all significant genes
+    # Default: label all significant genes
     p <- p + ggrepel::geom_text_repel(
       data          = dplyr::filter(df, signif),
       aes(label     = name),
