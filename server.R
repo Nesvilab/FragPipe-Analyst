@@ -3113,100 +3113,127 @@ output$download_density_svg<-downloadHandler(
   # Up to 5 highlight colors for multi-set volcano
   KB_GS_COLORS <- c("#e74c3c", "#3498db", "#2ecc71", "#f39c12", "#9b59b6")
 
-  # --- Database selector UI ---
+  # --- Database selector UI (multi-select) ---
   output$kb_gs_database_ui <- renderUI({
-    builtin <- list(
-      "Built-in databases" = c(
-        "KEGG"                    = "KEGG",
-        "Reactome"                = "Reactome",
-        "WikiPathways"            = "WikiPathways",
-        "Hallmark"                = "Hallmark",
-        "GO - Molecular Function" = "MF",
-        "GO - Biological Process" = "BP",
-        "GO - Cellular Component" = "CC",
-        "KEGG (Mouse)"            = "KEGG (Mouse)",
-        "WikiPathways (Mouse)"    = "WikiPathways (Mouse)"
-      )
+    builtin <- c(
+      "KEGG"                    = "KEGG",
+      "Reactome"                = "Reactome",
+      "WikiPathways"            = "WikiPathways",
+      "Hallmark"                = "Hallmark",
+      "GO - Molecular Function" = "MF",
+      "GO - Biological Process" = "BP",
+      "GO - Cellular Component" = "CC",
+      "KEGG (Mouse)"            = "KEGG (Mouse)",
+      "WikiPathways (Mouse)"    = "WikiPathways (Mouse)"
     )
     choices <- if (length(LOADED_GMT_FILES) > 0L) {
-      gmt_choices <- setNames(names(LOADED_GMT_FILES), names(LOADED_GMT_FILES))
-      c(builtin, list("Custom GMT files" = gmt_choices))
+      c(builtin, setNames(names(LOADED_GMT_FILES), names(LOADED_GMT_FILES)))
     } else {
       builtin
     }
-    selectInput("kb_gs_database", "Database:", choices = choices)
+    selectInput("kb_gs_databases", "Databases:", choices = choices,
+                selected = "Hallmark", multiple = TRUE)
   })
 
-  # --- Contrast selector: populated from ORA cache ---
-  output$kb_gs_contrast_ui <- renderUI({
-    cache <- kb_ora_cache()
-    db    <- input$kb_gs_database
-    if (!is.null(db) && length(cache) > 0L && db %in% names(cache) &&
-        !is.null(cache[[db]]) && "contrast" %in% colnames(cache[[db]])) {
-      cts <- sort(unique(cache[[db]]$contrast))
-    } else {
-      req(dep())
-      rd  <- as.data.frame(SummarizedExperiment::rowData(dep()))
-      cts <- gsub("_significant$", "",
-                  grep("_significant$", colnames(rd), value = TRUE))
-    }
-    selectInput("kb_gs_contrast", "Contrast:", choices = cts)
-  })
+  # --- ORA results store (independent of kb_ora_cache used by heatmap) ---
+  kb_gs_ora_results <- reactiveVal(NULL)
 
-  # Cache: full gene set collection for volcano labeling
-  kb_gs_collection_cache <- reactiveVal(list(db = NULL, data = NULL))
+  # Cache: full gene set collections for volcano labeling (multi-db)
+  kb_gs_collection_cache <- reactiveVal(list())
 
-  observeEvent(input$kb_gs_database, {
-    req(input$kb_gs_database)
-    db <- input$kb_gs_database
-    if (db %in% names(LOADED_GMT_FILES)) {
-      kb_gs_collection_cache(list(db = db, data = LOADED_GMT_FILES[[db]]))
-    } else {
-      id <- showNotification(paste0("Loading gene sets for: ", db, " \u2026"),
-                             duration = NULL, type = "message")
-      on.exit(removeNotification(id), add = TRUE)
-      gs <- tryCatch(.get_msig_genesets(db), error = function(e) NULL)
-      if (!is.null(gs)) {
-        kb_gs_collection_cache(list(db = db, data = gs))
-      } else {
-        showNotification("Failed to load gene sets.", type = "error")
+  # --- Run ORA button ---
+  observeEvent(input$kb_gs_run_ora, {
+    req(dep(), input$kb_contrast, input$kb_gs_databases, input$kb_gs_direction)
+    dbs       <- input$kb_gs_databases
+    contrast  <- input$kb_contrast
+    # Checkbox group: c("UP","DOWN") -> "both", single value -> that direction
+    dir_sel   <- input$kb_gs_direction
+    direction <- if (length(dir_sel) == 2L) "both" else dir_sel
+    alpha     <- input$kb_gs_p_cutoff
+    lfc       <- input$kb_gs_lfc_cutoff
+    adj_de    <- input$kb_gs_adjust_de
+
+    withProgress(message = "Running ORA …", value = 0, {
+      n <- length(dbs)
+      all_res <- lapply(seq_along(dbs), function(i) {
+        incProgress(1 / n, detail = dbs[i])
+        tryCatch(
+          suppressWarnings(suppressMessages(
+            run_ora_kb_single(dep(), database = dbs[i], contrast = contrast,
+                               direction = direction, alpha = alpha,
+                               log2_threshold = lfc, adjust_alpha = adj_de)
+          )),
+          error = function(e) {
+            showNotification(paste0("ORA failed for ", dbs[i], ": ", e$message),
+                             type = "warning")
+            NULL
+          }
+        )
+      })
+      results <- dplyr::bind_rows(Filter(Negate(is.null), all_res))
+    })
+
+    kb_gs_ora_results(if (nrow(results) > 0) results else NULL)
+
+    # Load gene set collections for selected databases (for "show all genes" mode)
+    col_cache <- kb_gs_collection_cache()
+    for (db in dbs) {
+      if (!db %in% names(col_cache)) {
+        gs <- if (db %in% names(LOADED_GMT_FILES)) {
+          LOADED_GMT_FILES[[db]]
+        } else {
+          tryCatch(.get_msig_genesets(db), error = function(e) NULL)
+        }
+        if (!is.null(gs)) col_cache[[db]] <- gs
       }
     }
+    kb_gs_collection_cache(col_cache)
+    # Clear previous table selection
+    DT::selectRows(kb_gs_table_proxy, NULL)
   })
 
-  # Filtered table data: ORA results for selected db + contrast + p cutoff
+  # Table data: ORA results with p-value pre-filtering via numeric inputs;
+  # Direction/Database/Gene Set filtering handled by DT's built-in column filters
   kb_gs_table_data <- reactive({
-    cache <- kb_ora_cache()
-    db    <- input$kb_gs_database
-    ct    <- input$kb_gs_contrast
-    pcut  <- input$kb_gs_pvalue_filter
+    res   <- kb_gs_ora_results()
+    p_cut <- input$kb_gs_p_filter
+    a_cut <- input$kb_gs_adjp_filter
 
-    validate(need(length(cache) > 0L,
-      "ORA not yet computed \u2014 navigate to this tab after running DE analysis."))
-    validate(need(!is.null(db) && db %in% names(cache) && !is.null(cache[[db]]),
-      paste0("No ORA results for '", db, "'. Try Refresh ORA.")))
+    validate(need(!is.null(res) && nrow(res) > 0,
+      "No ORA results yet \u2014 select databases and click 'Run ORA'."))
 
-    res <- cache[[db]]
-    if (!is.null(ct) && ct != "" && "contrast" %in% colnames(res))
-      res <- dplyr::filter(res, contrast == ct)
-    if (!is.null(pcut) && "p_hyper" %in% colnames(res))
-      res <- dplyr::filter(res, p_hyper <= pcut)
+    # Apply p-value cutoffs
+    if (!is.null(p_cut) && "p_hyper" %in% colnames(res))
+      res <- dplyr::filter(res, p_hyper <= p_cut)
+    if (!is.null(a_cut) && "p.adjust_hyper" %in% colnames(res))
+      res <- dplyr::filter(res, p.adjust_hyper <= a_cut)
+
+    validate(need(nrow(res) > 0,
+      "No results pass the current p-value cutoffs."))
+
+    # Direction as factor for dropdown filter
+    dir_label <- if ("direction" %in% colnames(res)) {
+      factor(ifelse(res$direction == "UP", "\u2191 Up", "\u2193 Down"))
+    } else {
+      factor(rep("", nrow(res)))
+    }
+    # Database as factor for dropdown filter
+    db_label <- if ("var" %in% colnames(res)) factor(res$var) else factor(rep("", nrow(res)))
 
     # Select and rename columns for display
-    cols <- intersect(
-      c("Term", "bg_IN", "IN", "geneID", "log_odds", "p_hyper", "p.adjust_hyper"),
-      colnames(res)
+    out <- data.frame(
+      Direction           = dir_label,
+      Database            = db_label,
+      `Gene Set`          = if ("Term" %in% colnames(res)) res$Term else res$Description,
+      Overlap             = if ("IN" %in% colnames(res)) res$IN else res$Count,
+      `log2 OR`           = if ("log_odds" %in% colnames(res)) res$log_odds else NA_real_,
+      `p-value`           = if ("p_hyper" %in% colnames(res)) res$p_hyper else NA_real_,
+      `adj. p-value`      = if ("p.adjust_hyper" %in% colnames(res)) res$p.adjust_hyper else NA_real_,
+      `Overlapping Genes` = if ("geneID" %in% colnames(res)) res$geneID else NA_character_,
+      check.names         = FALSE,
+      stringsAsFactors    = FALSE
     )
-    res <- res[, cols, drop = FALSE]
-    rename_map <- c(Term           = "Gene Set",
-                    bg_IN          = "Size",
-                    IN             = "Overlap",
-                    geneID         = "Overlapping Genes",
-                    log_odds       = "log2 OR",
-                    p_hyper        = "p-value",
-                    p.adjust_hyper = "adj. p-value")
-    colnames(res) <- rename_map[colnames(res)]
-    res
+    out
   })
 
   # Gene set table: multi-row selectable, built-in DT search
@@ -3221,12 +3248,12 @@ output$download_density_svg<-downloadHandler(
       df,
       selection = list(mode = "multiple", selected = NULL),
       rownames  = FALSE,
-      filter    = "none",
+      filter    = "top",
       options   = list(
         pageLength = 10,
         scrollX    = TRUE,
         scrollY    = "280px",
-        dom        = "ftp",
+        dom        = "tp",
         columnDefs = list(
           list(
             targets = overlap_idx,
@@ -3252,17 +3279,20 @@ output$download_density_svg<-downloadHandler(
     if (is.null(tbl) || !"Gene Set" %in% colnames(tbl)) return(NULL)
     rows <- head(sel, 5L)
     set_names <- tbl[["Gene Set"]][rows]
+    dir_labels <- if ("Direction" %in% colnames(tbl)) tbl[["Direction"]][rows] else NULL
     colors    <- KB_GS_COLORS[seq_along(rows)]
-    items <- mapply(function(nm, col) {
-      short <- if (nchar(nm) > 50) paste0(substr(nm, 1, 47), "...") else nm
+    items <- mapply(function(nm, col, idx) {
+      dir_tag <- if (!is.null(dir_labels)) paste0(" (", dir_labels[idx], ")") else ""
+      short <- if (nchar(nm) > 45) paste0(substr(nm, 1, 42), "...") else nm
+      label <- paste0(short, dir_tag)
       tags$span(style = paste0("margin-right:12px; white-space:nowrap;"),
         tags$span(style = paste0(
           "display:inline-block; width:12px; height:12px; ",
           "border-radius:2px; margin-right:4px; vertical-align:middle; ",
           "background-color:", col, ";")),
-        tags$span(style = "font-size:12px; vertical-align:middle;", short)
+        tags$span(style = "font-size:12px; vertical-align:middle;", label)
       )
-    }, set_names, colors, SIMPLIFY = FALSE)
+    }, set_names, colors, seq_along(rows), SIMPLIFY = FALSE)
     tags$div(style = "padding: 4px 0 6px 0; line-height: 1.8;", items)
   })
 
@@ -3280,17 +3310,45 @@ output$download_density_svg<-downloadHandler(
       rows      <- head(selected_rows, 5L)   # cap at 5 sets
       tbl       <- tryCatch(kb_gs_table_data(), error = function(e) NULL)
       col_cache <- kb_gs_collection_cache()
+      show_all  <- isTRUE(input$kb_gs_show_all_genes)
 
       if (!is.null(tbl) && "Gene Set" %in% colnames(tbl)) {
         set_names_sel <- tbl[["Gene Set"]][rows]
         overlap_genes <- if ("Overlapping Genes" %in% colnames(tbl))
           tbl[["Overlapping Genes"]][rows] else rep(NA_character_, length(rows))
+        # For legend labels: include direction if present
+        dir_labels <- if ("Direction" %in% colnames(tbl))
+          tbl[["Direction"]][rows] else rep("", length(rows))
+        legend_labels <- ifelse(dir_labels != "",
+          paste0(set_names_sel, " (", dir_labels, ")"),
+          set_names_sel)
+
+        # Build a reverse lookup (only when "show all genes" is checked)
+        # Maps lowercase-cleaned name -> gene vector so that e.g.
+        # "Metabolic pathways" matches "KEGG_METABOLIC_PATHWAYS"
+        .clean_name <- function(x) tolower(gsub("_", " ", gsub(
+          "^HALLMARK_|^KEGG_|^REACTOME_|^WP_|^GOBP_|^GOMF_|^GOCC_", "", x)))
+        rev_lookup <- list()
+        if (show_all && length(col_cache) > 0L) {
+          for (db_data in col_cache) {
+            for (k in names(db_data)) {
+              rev_lookup[[.clean_name(k)]] <- db_data[[k]]
+              rev_lookup[[tolower(k)]] <- db_data[[k]]
+            }
+          }
+        }
+
         gene_set_list <- setNames(
           lapply(seq_along(set_names_sel), function(i) {
             nm <- set_names_sel[i]
-            genes <- if (!is.null(col_cache$data)) col_cache$data[[nm]] else NULL
+            genes <- NULL
+            if (show_all) {
+              key <- tolower(nm)
+              genes <- rev_lookup[[key]]
+              if (is.null(genes)) genes <- rev_lookup[[.clean_name(nm)]]
+            }
             if (is.null(genes) || length(genes) == 0L) {
-              # Fallback: use overlapping genes from ORA results (slash-separated)
+              # Fall back to overlapping genes from ORA results
               gid <- overlap_genes[i]
               if (!is.na(gid) && nchar(gid) > 0L)
                 genes <- strsplit(gid, "/")[[1]]
@@ -3298,7 +3356,7 @@ output$download_density_svg<-downloadHandler(
             if (is.null(genes)) return(character(0L))
             genes
           }),
-          set_names_sel
+          legend_labels
         )
         # Drop empty sets
         gene_set_list <- Filter(function(x) length(x) > 0L, gene_set_list)
@@ -3323,87 +3381,38 @@ output$download_density_svg<-downloadHandler(
 
   # ===========================================================================
   # ORA PATHWAY HEATMAP  (rows = terms, cols = contrasts)
+  # Uses results from Gene Set Explorer (kb_gs_ora_results) — no independent
+
+  # computation.  Users should run ORA in the Gene Set Explorer first.
   # ===========================================================================
 
-  # Cache: named list database -> result data.frame (NULL = failed/skipped)
-  kb_ora_cache <- reactiveVal(list())
-
-  # Invalidate cache whenever the DE result changes
-  observeEvent(dep(), { kb_ora_cache(list()) })
-
-  # Local helper: run ORA for all databases and populate the cache
-  .run_kb_ora_precompute <- function() {
-    req(dep())
-    alpha   <- isolate(input$kb_ora_alpha)
-    backend <- isolate(input$kb_ora_backend)
-    if (is.null(alpha))   alpha   <- 0.05
-    if (is.null(backend)) backend <- "clusterProfiler"
-
-    withProgress(
-      message = paste0("Pre-computing ORA (", backend, ") …"),
-      value = 0,
-      {
-        results <- run_ora_kb_all(dep(), alpha = alpha, backend = backend,
-                                  progress = list(inc = function(amount, detail = NULL) {
-                                    incProgress(amount, detail = detail)
-                                  }))
-      }
-    )
-    kb_ora_cache(results)
-  }
-
-  # Trigger pre-computation when the KB tab is first entered
-  observeEvent(input$tab_panels, {
-    req(input$tab_panels == "kb_panel", dep())
-    if (length(kb_ora_cache()) > 0L) return()   # already computed for this dep()
-    .run_kb_ora_precompute()
-  })
-
-  # Manual refresh (re-runs with current alpha / backend settings)
-  observeEvent(input$kb_refresh_ora, {
-    req(dep())
-    kb_ora_cache(list())
-    .run_kb_ora_precompute()
-  })
-
-  # Database selector: built-in + any loaded GMT files
+  # Database selector: only show databases that have results from Gene Set Explorer
   output$kb_ora_database_ui <- renderUI({
-    builtin <- list(
-      "Built-in databases" = c(
-        "KEGG"                    = "KEGG",
-        "Reactome"                = "Reactome",
-        "WikiPathways"            = "WikiPathways",
-        "Hallmark"                = "Hallmark",
-        "GO - Molecular Function" = "MF",
-        "GO - Biological Process" = "BP",
-        "GO - Cellular Component" = "CC",
-        "KEGG (Mouse)"            = "KEGG (Mouse)",
-        "WikiPathways (Mouse)"    = "WikiPathways (Mouse)"
-      )
-    )
-    choices <- if (length(LOADED_GMT_FILES) > 0L) {
-      gmt_choices <- setNames(names(LOADED_GMT_FILES), names(LOADED_GMT_FILES))
-      c(builtin, list("Custom GMT files" = gmt_choices))
-    } else {
-      builtin
+    res <- kb_gs_ora_results()
+    if (is.null(res) || !"var" %in% colnames(res)) {
+      return(tags$p(style = "color:#888; margin-top:8px;",
+                    icon("info-circle"),
+                    " Run ORA in Gene Set Explorer first."))
     }
+    available_dbs <- unique(res$var)
+    choices <- setNames(available_dbs, available_dbs)
     selectInput("kb_ora_database", "Pathway database:", choices = choices,
-                selected = "KEGG")
+                selected = choices[1])
   })
 
-  # Status badge: idle / computing / ready
+  # Status badge: shows which databases are available from Gene Set Explorer
   output$kb_ora_status_ui <- renderUI({
-    cache <- kb_ora_cache()
-    if (length(cache) == 0L) {
-      tags$p(style = "color:#888; margin-top:8px;",
-             icon("clock-o"), " ORA not yet computed.")
+    res <- kb_gs_ora_results()
+    if (is.null(res) || !"var" %in% colnames(res)) {
+      tags$p(style = "color:#888; margin-top:4px;",
+             icon("info-circle"),
+             " No ORA results. Run ORA in Gene Set Explorer first.")
     } else {
-      n_ok   <- sum(vapply(cache, function(x) !is.null(x) && nrow(x) > 0, logical(1)))
-      n_fail <- length(cache) - n_ok
-      msg    <- paste0(n_ok, " databases ready")
-      if (n_fail > 0) msg <- paste0(msg, ", ", n_fail, " skipped")
-      tags$p(style = "color:#27ae60; margin-top:8px;",
-             icon("check-circle"), " ", msg)
+      dbs <- unique(res$var)
+      tags$p(style = "color:#27ae60; margin-top:4px;",
+             icon("check-circle"),
+             paste0(length(dbs), " database(s) available: ",
+                    paste(dbs, collapse = ", ")))
     }
   })
 
@@ -3429,23 +3438,24 @@ output$download_density_svg<-downloadHandler(
                        choices = filtered, selected = filtered)
   })
 
-  # Heatmap UI: placeholder until cache is ready
+  # Heatmap UI: placeholder until results are available
   output$kb_ora_heatmap_ui <- renderUI({
-    cache <- kb_ora_cache()
-    db    <- input$kb_ora_database
-    if (is.null(db) || length(cache) == 0L || !db %in% names(cache)) return(NULL)
+    res <- kb_gs_ora_results()
+    db  <- input$kb_ora_database
+    if (is.null(db) || is.null(res) || !"var" %in% colnames(res)) return(NULL)
+    if (!db %in% unique(res$var)) return(NULL)
     shinycssloaders::withSpinner(
       plotOutput("kb_ora_heatmap", height = 520), color = "#3c8dbc")
   })
 
-  # Heatmap plot: reactive on cache + controls (no button needed)
+  # Heatmap plot: reads from Gene Set Explorer results
   output$kb_ora_heatmap <- renderPlot({
-    cache <- kb_ora_cache()
-    req(cache, input$kb_ora_database)
+    res <- kb_gs_ora_results()
+    req(res, input$kb_ora_database)
 
-    ora_res <- cache[[input$kb_ora_database]]
-    validate(need(!is.null(ora_res) && nrow(ora_res) > 0,
-                  "No ORA results for this database. Try Refresh ORA or a different database."))
+    ora_res <- dplyr::filter(res, var == input$kb_ora_database)
+    validate(need(nrow(ora_res) > 0,
+                  "No ORA results for this database. Run ORA in Gene Set Explorer first."))
 
     # Apply contrast filter (control condition selection)
     sel_contrasts <- input$kb_ora_contrasts
@@ -3469,66 +3479,6 @@ output$download_density_svg<-downloadHandler(
         ggplot2::annotate("text", x = 0.5, y = 0.5, size = 5,
                           label = paste0("ORA heatmap error:\n", e$message)) +
         ggplot2::theme_void()
-    })
-  })
-
-  # ===========================================================================
-  # GSVA PATHWAY HEATMAP
-  # ===========================================================================
-
-  # Own database selector for GSVA (independent of Gene Set Explorer)
-  output$kb_gsva_database_ui <- renderUI({
-    builtin <- list(
-      "Built-in databases" = c(
-        "KEGG"                    = "KEGG",
-        "Reactome"                = "Reactome",
-        "WikiPathways"            = "WikiPathways",
-        "Hallmark"                = "Hallmark",
-        "GO - Molecular Function" = "MF",
-        "GO - Biological Process" = "BP",
-        "GO - Cellular Component" = "CC",
-        "KEGG (Mouse)"            = "KEGG (Mouse)",
-        "WikiPathways (Mouse)"    = "WikiPathways (Mouse)"
-      )
-    )
-    choices <- if (length(LOADED_GMT_FILES) > 0L) {
-      gmt_choices <- setNames(names(LOADED_GMT_FILES), names(LOADED_GMT_FILES))
-      c(builtin, list("Custom GMT files" = gmt_choices))
-    } else {
-      builtin
-    }
-    selectInput("kb_gsva_database", "Pathway database:", choices = choices,
-                selected = "Hallmark")
-  })
-
-  output$kb_heatmap_ui <- renderUI({
-    req(input$kb_run_gsva)
-    shinycssloaders::withSpinner(
-      plotOutput("kb_pathway_heatmap", height = 520), color = "#3c8dbc")
-  })
-
-  observeEvent(input$kb_run_gsva, {
-    output$kb_pathway_heatmap <- renderPlot({
-      req(dep(), input$kb_gsva_database)
-      db <- input$kb_gsva_database
-      # For GMT files pass gene sets directly; for built-in let the function fetch
-      gs <- if (db %in% names(LOADED_GMT_FILES)) LOADED_GMT_FILES[[db]] else NULL
-      tryCatch({
-        hm <- plot_gsva_heatmap(
-          dep(),
-          database           = db,
-          gene_sets          = gs,
-          top_n              = input$kb_gsva_top_n,
-          order_by_condition = input$kb_order_by_condition
-        )
-        ComplexHeatmap::draw(hm)
-      }, error = function(e) {
-        ggplot2::ggplot() +
-          ggplot2::annotate("text", x = 0.5, y = 0.5, size = 5,
-                            label = paste0("GSVA error:\n", conditionMessage(e)),
-                            hjust = 0.5) +
-          ggplot2::theme_void()
-      })
     })
   })
 

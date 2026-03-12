@@ -87,6 +87,14 @@ plot_ora_heatmap <- function(ora_results, top_n = 30,
     stop("ORA results missing columns: ", paste(missing, collapse = ", "))
 
   # ---- 1. Select top terms significant in at least one contrast ----------- #
+
+  # If direction column exists (UP/DOWN), make Term unique per direction
+  has_direction <- "direction" %in% colnames(ora_results)
+  if (has_direction) {
+    ora_results <- ora_results %>%
+      dplyr::mutate(Term = paste0(Term, " (", direction, ")"))
+  }
+
   sig_terms <- ora_results %>%
     dplyr::filter(p_hyper < alpha) %>%
     dplyr::pull(Term) %>%
@@ -292,6 +300,92 @@ plot_ora_heatmap <- function(ora_results, top_n = 30,
       )
   })
   dplyr::bind_rows(Filter(Negate(is.null), results))
+}
+
+#' Run ORA for a single contrast + single database (Gene Set Explorer)
+#'
+#' @param dep            SummarizedExperiment after test_diff()
+#' @param database       Database name (built-in or GMT collection name)
+#' @param contrast       Single contrast name (e.g. "A_vs_B")
+#' @param direction      "UP", "DOWN", or "both"
+#' @param alpha          p-value cutoff for selecting DE genes
+#' @param log2_threshold log2 fold-change cutoff for DE gene selection
+#' @param adjust_alpha   Use adjusted p-values for DE selection?
+#' @param backend        "clusterProfiler" (default) or "enrichr"
+#' @return data.frame with ORA results; has a 'direction' column when direction="both"
+run_ora_kb_single <- function(dep, database, contrast,
+                               direction = "both", alpha = 0.05,
+                               log2_threshold = 1, adjust_alpha = TRUE,
+                               backend = "clusterProfiler") {
+  loaded_gmt <- tryCatch(
+    get("LOADED_GMT_FILES", envir = .GlobalEnv, inherits = FALSE),
+    error = function(e) list()
+  )
+  is_gmt <- database %in% names(loaded_gmt)
+
+  run_one_dir <- function(dir) {
+    if (is_gmt) {
+      # Custom GMT
+      term2gene <- data.frame(
+        term = rep(names(loaded_gmt[[database]]), lengths(loaded_gmt[[database]])),
+        gene = unlist(loaded_gmt[[database]], use.names = FALSE),
+        stringsAsFactors = FALSE
+      )
+      info  <- .kb_extract_genes(dep, contrast = contrast, direction = dir,
+                                  log2_threshold = log2_threshold, alpha = alpha,
+                                  adjust_alpha = adjust_alpha)
+      genes <- info$sig_genes
+      bg    <- info$background
+      if (length(genes) == 0) return(NULL)
+      res <- tryCatch(
+        suppressWarnings(suppressMessages(
+          clusterProfiler::enricher(gene = genes, universe = bg,
+                                     TERM2GENE = term2gene,
+                                     pvalueCutoff = 1, qvalueCutoff = 1,
+                                     minGSSize = 3)
+        )), error = function(e) NULL)
+      if (is.null(res)) return(NULL)
+      df <- as.data.frame(res)
+      if (nrow(df) == 0) return(NULL)
+      bg_IN  <- as.numeric(gsub("/.*", "", df$BgRatio))
+      bg_OUT <- as.numeric(gsub(".*/", "", df$BgRatio)) - bg_IN
+      df %>%
+        dplyr::rename(Term = Description, IN = Count) %>%
+        dplyr::mutate(
+          contrast       = contrast,
+          OUT            = length(genes) - IN,
+          Odds.Ratio     = (IN * bg_OUT) / (OUT * bg_IN),
+          log_odds       = log2(Odds.Ratio),
+          p_hyper        = pvalue,
+          p.adjust_hyper = p.adjust,
+          var            = database
+        )
+    } else {
+      # Built-in database via test_ora_mod (single contrast)
+      res <- test_ora_mod(dep, databases = database, contrasts = TRUE,
+                          direction = dir, log2_threshold = log2_threshold,
+                          alpha = alpha, adjust_alpha = adjust_alpha,
+                          backend = backend)
+      if (is.null(res) || nrow(res) == 0) return(NULL)
+      # Filter to the requested contrast
+      if ("contrast" %in% colnames(res))
+        res <- dplyr::filter(res, contrast == !!contrast)
+      if (nrow(res) == 0) return(NULL)
+      res
+    }
+  }
+
+  if (direction == "both") {
+    up   <- run_one_dir("UP")
+    down <- run_one_dir("DOWN")
+    if (!is.null(up))   up$direction   <- "UP"
+    if (!is.null(down))  down$direction <- "DOWN"
+    dplyr::bind_rows(up, down)
+  } else {
+    res <- run_one_dir(direction)
+    if (!is.null(res)) res$direction <- direction
+    res
+  }
 }
 
 #' Run ORA across all contrasts — built-in databases or custom GMT files

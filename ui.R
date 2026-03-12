@@ -869,21 +869,40 @@ ui <- function(request){shinyUI(
                 # === Gene Set Explorer ===
                 box(title = "Gene Set Explorer", width = 6,
                   fluidRow(
-                    column(6, uiOutput("kb_gs_database_ui")),
-                    column(6, uiOutput("kb_gs_contrast_ui"))
+                    column(5, uiOutput("kb_gs_database_ui")),
+                    column(4, checkboxGroupInput("kb_gs_direction", "Direction",
+                                           choices = c("Up" = "UP", "Down" = "DOWN"),
+                                           inline = TRUE, selected = c("UP", "DOWN"))),
+                    column(3, shinyWidgets::dropdownButton(
+                      circle = TRUE, status = "default", right = TRUE,
+                      icon = icon("gear"), width = "300px",
+                      numericInput("kb_gs_p_cutoff", "DE p-value cutoff",
+                                   min = 0, max = 1, value = 0.05),
+                      numericInput("kb_gs_lfc_cutoff", "DE log2 fold change cutoff",
+                                   min = 0, max = 10, value = 1),
+                      checkboxInput("kb_gs_adjust_de",
+                                    "Apply adjusted p-values to select DE results",
+                                    value = TRUE),
+                      tooltip = tooltipOptions(placement = "left",
+                                               title = "customize settings")
+                    ))
                   ),
                   fluidRow(
-                    column(6,
-                      numericInput("kb_gs_pvalue_filter", "p-value filter",
+                    column(3, actionButton("kb_gs_run_ora", "Run ORA",
+                                           icon = icon("play"))),
+                    column(3,
+                      numericInput("kb_gs_p_filter", "p-value \u2264",
+                                   min = 0, max = 1, value = 1, step = 0.01)
+                    ),
+                    column(3,
+                      numericInput("kb_gs_adjp_filter", "adj. p-value \u2264",
                                    min = 0, max = 1, value = 0.05, step = 0.01)
                     ),
-                    column(6,
+                    column(3,
                       tags$div(style = "margin-top: 26px;",
-                        tags$small(style = "color: #888;",
-                          icon("info-circle"),
-                          " Select up to 5 gene sets. Each set is colored",
-                          " differently on the volcano plot."
-                        )
+                        checkboxInput("kb_gs_show_all_genes",
+                                      "Label all genes in gene set",
+                                      value = FALSE)
                       )
                     )
                   ),
@@ -892,22 +911,13 @@ ui <- function(request){shinyUI(
                 )
               ),
 
-              # --- Row 2: ORA Pathway Heatmap (left) + GSVA Pathway Heatmap (right) ---
+              # --- Row 2: ORA Pathway Heatmap ---
               fluidRow(
-                # === ORA Pathway Heatmap ===
-                box(title = "ORA Pathway Heatmap", width = 6,
+                box(title = "ORA Pathway Heatmap", width = 12,
                   fluidRow(
-                    column(8, uiOutput("kb_ora_database_ui")),
-                    column(4,
-                      radioButtons("kb_ora_backend", "Backend:",
-                                   choices = c("clusterProfiler" = "clusterProfiler",
-                                               "Enrichr (online)" = "enrichr"),
-                                   selected = "clusterProfiler")
-                    )
-                  ),
-                  fluidRow(
-                    column(6, uiOutput("kb_ora_control_ui")),
-                    column(6, uiOutput("kb_ora_contrast_ui"))
+                    column(4, uiOutput("kb_ora_database_ui")),
+                    column(4, uiOutput("kb_ora_control_ui")),
+                    column(4, uiOutput("kb_ora_contrast_ui"))
                   ),
                   fluidRow(
                     column(4,
@@ -930,41 +940,8 @@ ui <- function(request){shinyUI(
                                    min = 0, max = 1, value = 0.05, step = 0.01)
                     )
                   ),
-                  fluidRow(
-                    column(8, uiOutput("kb_ora_status_ui")),
-                    column(4,
-                      actionButton("kb_refresh_ora", "Refresh ORA",
-                                   class = "btn-warning btn-block",
-                                   icon = icon("refresh"))
-                    )
-                  ),
+                  uiOutput("kb_ora_status_ui"),
                   uiOutput("kb_ora_heatmap_ui")
-                ),
-
-                # === GSVA Pathway Heatmap ===
-                box(title = "GSVA Pathway Heatmap", width = 6,
-                  fluidRow(
-                    column(12, uiOutput("kb_gsva_database_ui"))
-                  ),
-                  fluidRow(
-                    column(5,
-                      sliderInput("kb_gsva_top_n", "Top N pathways",
-                                  min = 5, max = 100, value = 25, step = 5),
-                      tags$small(style = "color:#888;",
-                        "ranked by score variance across samples")
-                    ),
-                    column(4,
-                      checkboxInput("kb_order_by_condition",
-                                    "Order by condition",
-                                    value = TRUE)
-                    ),
-                    column(3,
-                      br(),
-                      actionButton("kb_run_gsva", "Run GSVA",
-                                   class = "btn-warning btn-block")
-                    )
-                  ),
-                  uiOutput("kb_heatmap_ui")
                 )
               ),
 
