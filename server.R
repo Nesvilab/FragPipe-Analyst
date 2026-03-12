@@ -883,28 +883,28 @@ server <- function(input, output, session) {
      } else if (input$exp == "LFQ-peptide" & input$lfq_pept_type == "Spectral Count") {
        assay(data) <- log2(assay(data))
      }
+     # Parse control condition if provided
+     control <- NULL
+     if (nzchar(input$control_condition)) {
+       if (!grepl(";", input$control_condition)) {
+         control <- input$control_condition
+       } else {
+         control <- unlist(str_split(input$control_condition, ";"))
+       }
+     }
+
      if(input$fdr_correction=="BH"){
        if (input$DE_type == "all") {
-         diff_all <- test_limma_customized(data, type="all", paired = F)
+         diff_all <- test_limma_customized(data, type="all", control=control, paired = F)
        } else if (input$DE_type == "control") {
-         if (!grepl(";", input$control_condition)) {
-           control <- input$control_condition
-         } else {
-           control <- unlist(str_split(input$control_condition, ";"))
-         }
          diff_all <- test_limma_customized(data, type="control", control=control, paired = F)
        } else if (input$DE_type == "others") {
          diff_all <- test_limma_customized(data, type="others", paired = F)
        }
      } else { # t-statistics-based
        if (input$DE_type == "all") {
-         diff_all <- test_diff_customized(data, type = "all")
+         diff_all <- test_diff_customized(data, type = "all", control=control)
        } else if (input$DE_type == "control") {
-         if (!grepl(";", input$control_condition)) {
-           control <- input$control_condition
-         } else {
-           control <- unlist(str_split(input$control_condition, ";"))
-         }
          diff_all <- test_diff_customized(data, type="control", control=control)
        } else if (input$DE_type == "others") {
          diff_all <- test_diff_customized(data, type="others")
@@ -920,6 +920,22 @@ server <- function(input, output, session) {
        if(input$DE_type == "all") {
          # All possible combinations
          cntrst <- apply(utils::combn(conditions, 2), 2, paste, collapse = " - ")
+         # If control condition is specified, flip so control is always the denominator
+         if (nzchar(input$control_condition)) {
+           if (!grepl(";", input$control_condition)) {
+             control <- input$control_condition
+           } else {
+             control <- unlist(str_split(input$control_condition, ";"))
+           }
+           for (ctrl in control) {
+             flip <- grep(paste0("^", ctrl, " - "), cntrst)
+             if (length(flip) >= 1) {
+               cntrst[flip] <- cntrst[flip] %>%
+                 gsub(paste0(ctrl, " - "), "", .) %>%
+                 paste0(" - ", ctrl)
+             }
+           }
+         }
        } else if (input$DE_type == "control") {
          if (!grepl(";", input$control_condition)) {
            control <- input$control_condition
