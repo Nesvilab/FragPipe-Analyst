@@ -3,6 +3,14 @@ server <- function(input, output, session) {
   USE_LOCAL_ENRICHMENT <- T
   options(shiny.maxRequestSize=100*1024^2)## Set maximum upload size to 100MB
   ENTRY_LIMIT <- 180000
+
+  ## Logging
+  log_messages <- reactiveVal(character(0))
+  log_msg <- function(...) {
+    msg <- paste0("[", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "] ", paste(...))
+    log_messages(c(log_messages(), msg))
+    message(msg)
+  }
   
   observeEvent(input$exp, {
     if(input$exp %in% c("TMT", "TMT-peptide", "TMT-site")){
@@ -154,6 +162,8 @@ server <- function(input, output, session) {
                 closeOnClickOutside = TRUE,
                 closeOnEsc = TRUE,
                 timer = 10000) # timer in miliseconds (10 sec)
+    log_messages(character(0)) # reset log on new analysis
+    log_msg("Analysis started. Data type:", input$exp)
      return(T)
    })
    
@@ -200,7 +210,26 @@ server <- function(input, output, session) {
                       choices = gsub("_significant", "", colnames(df)[cols]))
      }
    })
-   
+
+   output$dual_cntrst_1 <- renderUI({
+     if (!is.null(comparisons())) {
+       df <- SummarizedExperiment::rowData(dep())
+       cols <- grep("_significant$", colnames(df))
+       choices <- gsub("_significant", "", colnames(df)[cols])
+       selectizeInput("dual_cntrst_1", "Comparison 1", choices = choices)
+     }
+   })
+
+   output$dual_cntrst_2 <- renderUI({
+     if (!is.null(comparisons())) {
+       df <- SummarizedExperiment::rowData(dep())
+       cols <- grep("_significant$", colnames(df))
+       choices <- gsub("_significant", "", colnames(df)[cols])
+       selected <- if (length(choices) >= 2) choices[2] else choices[1]
+       selectizeInput("dual_cntrst_2", "Comparison 2", choices = choices, selected = selected)
+     }
+   })
+
    output$downloadTable <- renderUI({
      if(!is.null(dep())){
      selectizeInput("dataset",
@@ -304,16 +333,22 @@ server <- function(input, output, session) {
         colnames(temp_data) <- gsub("-", ".", colnames(temp_data))
         validate(fragpipe_input_test(temp_data))
         # remove contam
-        temp_data <- temp_data[!grepl("contam", temp_data$Protein),]
+        if (isTRUE(input$contam_rm)) {
+          temp_data <- temp_data[!grepl("contam", temp_data$Protein),]
+        }
       } else if (input$exp == "DIA"){ # DIA
         validate(fragpipe_DIA_input_test(temp_data))
-        # temp_data <- temp_data[!grepl("contam", temp_data$Protein),]
+        if (isTRUE(input$contam_rm) & "Protein.Group" %in% colnames(temp_data)) {
+          temp_data <- temp_data[!grepl("contam", temp_data$Protein.Group),]
+        }
       } else if (input$exp == "LFQ-peptide") {
         colnames(temp_data) <- gsub("-", ".", colnames(temp_data))
         colnames(temp_data)[colnames(temp_data) == "Protein Description"] <- "Description"
         validate(fragpipe_input_test(temp_data))
         # remove contam
-        temp_data <- temp_data[!grepl("contam", temp_data$Protein),]
+        if (isTRUE(input$contam_rm)) {
+          temp_data <- temp_data[!grepl("contam", temp_data$Protein),]
+        }
         if (!"Modified Sequence" %in% colnames(temp_data)) {
           temp_data$Index <- paste0(temp_data$`Protein ID`, "_", temp_data$`Peptide Sequence`)
         } else {
@@ -432,6 +467,7 @@ server <- function(input, output, session) {
                     "Error: Duplicated sample detected. Please check your experiment_annotation.tsv again."))
 
       if (input$exp %in% c("TMT", "TMT-peptide", "TMT-site")) {
+        required_columns <- c("plex", "channel", "sample", "sample_name", "condition", "replicate")
         # to support - (dash) or name starts with number in condition column
         temp_df$condition <- make.names(temp_df$condition)
         validate(need(try(test_TMT_annotation(temp_df)),
@@ -448,10 +484,12 @@ server <- function(input, output, session) {
           samples_with_replicate <- unique(gsub("_\\d+$", "", samples_with_replicate))
           temp_df[temp_df$label %in% samples_with_replicate, "label"] <- paste0(temp_df[temp_df$label %in% samples_with_replicate, "label"], "_1")
         }
+        
       } else if (input$exp == "LFQ" | input$exp == "LFQ-peptide"){
         # exp_design_test(temp_df)
         # temp_df$label<-as.character(temp_df$label)
         # temp_df$condition<-trimws(temp_df$condition, which = "left")
+        required_columns <- c("file", "sample", "sample_name", "condition", "replicate")
 
         # to support - (dash) or name starts with number in condition column
         temp_df$condition <- make.names(temp_df$condition)
@@ -470,12 +508,15 @@ server <- function(input, output, session) {
           }
         }
       } else if (input$exp == "DIA" | input$exp == "DIA-peptide" | input$exp == "DIA-site") {
+        required_columns <- c("file", "sample", "sample_name", "condition", "replicate")
         validate(need("file" %in% colnames(temp_df),
                       "Error: No file column provided. Please check your experiment_annotation.tsv again."))
         # to support - (dash) or name starts with number in condition column
         temp_df$condition <- make.names(temp_df$condition)
         # other logics were moved to the processed_data function
       }
+      validate(test_empty_column(temp_df, required_columns))
+      
       return(temp_df)
     })
    
@@ -918,6 +959,7 @@ server <- function(input, output, session) {
      input$analyze
      input$pca_imputed
      input$pca_scale
+    input$pca_color_by
      },{
      if(input$analyze==0 | !start_analysis()){
        return()
@@ -930,12 +972,13 @@ server <- function(input, output, session) {
        data <- normalized_data()
        num_total <- num_total_origin()
      }
+     indicate <- if (input$exp == "TMT" && !is.null(input$pca_color_by)) input$pca_color_by else "condition"
      if (num_total<=500){
        if(length(levels(as.factor(colData(data)$replicate))) <= 6){
-         pca_plot<- plot_pca_plotly(data, n=num_total, indicate = "condition", ID_col=ID_col, exp=input$exp, scale=input$pca_scale)
+         pca_plot<- plot_pca_plotly(data, n=num_total, indicate = indicate, ID_col=ID_col, exp=input$exp, scale=input$pca_scale)
        }
      } else {
-       pca_plot<-plot_pca_plotly(data, indicate = "condition", ID_col=ID_col, exp=input$exp, scale=input$pca_scale)
+       pca_plot<-plot_pca_plotly(data, indicate = indicate, ID_col=ID_col, exp=input$exp, scale=input$pca_scale)
      }
      return(pca_plot)
    })
@@ -1002,11 +1045,155 @@ server <- function(input, output, session) {
       if(!is.null(input$volcano_cntrst)) {
         get_volcano_df(dep(),
                          input$volcano_cntrst)
-        
+
       }
     })
 
-    
+    ### Dual Comparison
+    dual_comparison_data <- reactive({
+      req(input$dual_cntrst_1, input$dual_cntrst_2, dep())
+      row_data <- as.data.frame(SummarizedExperiment::rowData(dep()))
+      c1 <- input$dual_cntrst_1
+      c2 <- input$dual_cntrst_2
+      lfc_col1 <- paste0(c1, "_diff")
+      lfc_col2 <- paste0(c2, "_diff")
+      pval_col1 <- paste0(c1, "_p.val")
+      pval_col2 <- paste0(c2, "_p.val")
+      padj_col1 <- paste0(c1, "_p.adj")
+      padj_col2 <- paste0(c2, "_p.adj")
+      p_col1 <- if (isTRUE(input$dual_p_adj)) padj_col1 else pval_col1
+      p_col2 <- if (isTRUE(input$dual_p_adj)) padj_col2 else pval_col2
+      req(all(c(lfc_col1, lfc_col2, p_col1, p_col2) %in% colnames(row_data)))
+      alpha <- input$dual_alpha
+      lfc_cut <- input$dual_lfc
+      sig1 <- !is.na(row_data[[p_col1]]) & abs(row_data[[lfc_col1]]) >= lfc_cut & row_data[[p_col1]] <= alpha
+      sig2 <- !is.na(row_data[[p_col2]]) & abs(row_data[[lfc_col2]]) >= lfc_cut & row_data[[p_col2]] <= alpha
+      status <- dplyr::case_when(
+        sig1 & sig2  ~ "Both significant",
+        sig1 & !sig2 ~ paste0("Only ", c1),
+        !sig1 & sig2 ~ paste0("Only ", c2),
+        TRUE         ~ "Not significant"
+      )
+      label_col <- if ("Gene" %in% colnames(row_data)) "Gene" else "name"
+      df <- data.frame(
+        lfc1   = row_data[[lfc_col1]],
+        lfc2   = row_data[[lfc_col2]],
+        status = status,
+        name   = row_data[[label_col]],
+        stringsAsFactors = FALSE
+      )
+      colnames(df)[1:2] <- c(paste0("log2FC_", c1), paste0("log2FC_", c2))
+      df[[paste0("p.val_", c1)]] <- if (pval_col1 %in% colnames(row_data)) row_data[[pval_col1]] else NA
+      df[[paste0("p.val_", c2)]] <- if (pval_col2 %in% colnames(row_data)) row_data[[pval_col2]] else NA
+      df[[paste0("p.adj_", c1)]] <- if (padj_col1 %in% colnames(row_data)) row_data[[padj_col1]] else NA
+      df[[paste0("p.adj_", c2)]] <- if (padj_col2 %in% colnames(row_data)) row_data[[padj_col2]] else NA
+      df
+    })
+
+    output$dual_comparison_plot <- renderPlot({
+      req(dual_comparison_data())
+      df <- dual_comparison_data()
+      c1 <- input$dual_cntrst_1
+      c2 <- input$dual_cntrst_2
+      lfc_col1 <- paste0("log2FC_", c1)
+      lfc_col2 <- paste0("log2FC_", c2)
+      status_levels <- c("Both significant",
+                         paste0("Only ", c1),
+                         paste0("Only ", c2),
+                         "Not significant")
+      status_levels <- status_levels[status_levels %in% unique(df$status)]
+      colors <- c("Both significant"      = "#C0392B",
+                  "Not significant"       = "grey70")
+      colors[paste0("Only ", c1)] <- "#E67E22"
+      colors[paste0("Only ", c2)] <- "#2980B9"
+      df$status <- factor(df$status, levels = status_levels)
+      df_filtered <- df[!is.na(df[[lfc_col1]]) & !is.na(df[[lfc_col2]]), ]
+      axis_lim <- max(abs(c(df_filtered[[lfc_col1]], df_filtered[[lfc_col2]])), na.rm = TRUE) * 1.05
+      df_labeled <- df_filtered[df_filtered$status == "Both significant", ]
+      p <- ggplot(df_filtered,
+                  aes(x = .data[[lfc_col1]], y = .data[[lfc_col2]], color = status)) +
+        geom_point(alpha = 0.6, size = 2) +
+        scale_color_manual(values = colors, name = "Significance") +
+        geom_hline(yintercept = c(-input$dual_lfc, input$dual_lfc),
+                   linetype = "dashed", color = "grey40") +
+        geom_vline(xintercept = c(-input$dual_lfc, input$dual_lfc),
+                   linetype = "dashed", color = "grey40") +
+        coord_equal(xlim = c(-axis_lim, axis_lim), ylim = c(-axis_lim, axis_lim)) +
+        labs(x = paste0("log2FC (", c1, ")"),
+             y = paste0("log2FC (", c2, ")"),
+             title = "Marker Nomination: Dual Comparison") +
+        theme_bw() +
+        theme(legend.position = "right")
+      if (nrow(df_labeled) > 0 && nrow(df_labeled) <= 40) {
+        p <- p + ggrepel::geom_text_repel(data = df_labeled,
+                                           aes(x = .data[[lfc_col1]], y = .data[[lfc_col2]], label = name),
+                                           color = "#C0392B", size = 3,
+                                           box.padding = unit(0.2, "lines"),
+                                           max.overlaps = 20)
+      }
+      p
+    })
+
+    output$download_dual_comparison <- downloadHandler(
+      filename = function() {
+        paste0("dual_comparison_", input$dual_cntrst_1, "_and_", input$dual_cntrst_2, ".tsv")
+      },
+      content = function(file) {
+        df <- dual_comparison_data()
+        write.table(df, file, col.names = TRUE, row.names = FALSE, sep = "\t")
+      }
+    )
+
+    output$download_dual_comparison_plot <- downloadHandler(
+      filename = function() {
+        paste0("dual_comparison_scatter_", input$dual_cntrst_1, "_and_", input$dual_cntrst_2, ".pdf")
+      },
+      content = function(file) {
+        df <- dual_comparison_data()
+        c1 <- input$dual_cntrst_1
+        c2 <- input$dual_cntrst_2
+        lfc_col1 <- paste0("log2FC_", c1)
+        lfc_col2 <- paste0("log2FC_", c2)
+        status_levels <- c("Both significant",
+                           paste0("Only ", c1),
+                           paste0("Only ", c2),
+                           "Not significant")
+        status_levels <- status_levels[status_levels %in% unique(df$status)]
+        colors <- c("Both significant"      = "#C0392B",
+                    "Not significant"       = "grey70")
+        colors[paste0("Only ", c1)] <- "#E67E22"
+        colors[paste0("Only ", c2)] <- "#2980B9"
+        df$status <- factor(df$status, levels = status_levels)
+        df_filtered <- df[!is.na(df[[lfc_col1]]) & !is.na(df[[lfc_col2]]), ]
+        axis_lim <- max(abs(c(df_filtered[[lfc_col1]], df_filtered[[lfc_col2]])), na.rm = TRUE) * 1.05
+        df_labeled <- df_filtered[df_filtered$status == "Both significant", ]
+        p <- ggplot(df_filtered,
+                    aes(x = .data[[lfc_col1]], y = .data[[lfc_col2]], color = status)) +
+          geom_point(alpha = 0.6, size = 2) +
+          scale_color_manual(values = colors, name = "Significance") +
+          geom_hline(yintercept = c(-input$dual_lfc, input$dual_lfc),
+                     linetype = "dashed", color = "grey40") +
+          geom_vline(xintercept = c(-input$dual_lfc, input$dual_lfc),
+                     linetype = "dashed", color = "grey40") +
+          coord_equal(xlim = c(-axis_lim, axis_lim), ylim = c(-axis_lim, axis_lim)) +
+          labs(x = paste0("log2FC (", c1, ")"),
+               y = paste0("log2FC (", c2, ")"),
+               title = "Marker Nomination: Dual Comparison") +
+          theme_bw() +
+          theme(legend.position = "right")
+        if (nrow(df_labeled) > 0 && nrow(df_labeled) <= 40) {
+          p <- p + ggrepel::geom_text_repel(data = df_labeled,
+                                             aes(x = .data[[lfc_col1]], y = .data[[lfc_col2]], label = name),
+                                             color = "#C0392B", size = 3,
+                                             box.padding = unit(0.2, "lines"),
+                                             max.overlaps = 20)
+        }
+        pdf(file)
+        print(p)
+        dev.off()
+      }
+    )
+
     volcano_input_selected <- reactive({
       if(!is.null(input$volcano_cntrst)){
         proteins_selected <- NULL
@@ -1569,6 +1756,64 @@ server <- function(input, output, session) {
     })
   })
   
+  ##### Logging observers
+  observeEvent(processed_data(), {
+    se <- processed_data()
+    log_msg(sprintf("Data loaded: %d features x %d samples", nrow(se), ncol(se)))
+    conditions <- unique(colData(se)$condition)
+    log_msg(sprintf("Conditions: %s", paste(conditions, collapse=", ")))
+  })
+
+  observeEvent(filtered_data(), {
+    se_in <- processed_data()
+    se_out <- filtered_data()
+    removed <- nrow(se_in) - nrow(se_out)
+    log_msg(sprintf("Filtering: %d features retained, %d removed (global >= %g%%, per-condition >= %g%%)",
+                    nrow(se_out), removed,
+                    input$min_global_appearance, input$min_appearance_each_condition))
+  })
+
+  observeEvent(normalized_data(), {
+    norm_label <- switch(input$normalization,
+      "none" = "none",
+      "vsn"  = "VSN",
+      "MD"   = "Median-centered",
+      input$normalization)
+    log_msg(sprintf("Normalization: %s", norm_label))
+  })
+
+  observeEvent(imputed_data(), {
+    imp_label <- if (input$imputation == "none") "none" else input$imputation
+    log_msg(sprintf("Imputation: %s", imp_label))
+  })
+
+  observeEvent(dep(), {
+    se <- dep()
+    sig_cols <- grep("_significant$", colnames(rowData(se)), value=TRUE)
+    n_sig <- if (length(sig_cols) > 0) sum(rowSums(as.data.frame(rowData(se)[, sig_cols, drop=FALSE]), na.rm=TRUE) > 0) else 0
+    log_msg(sprintf("DE analysis complete (FDR method: %s, p <= %g, |LFC| >= %g): %d significant feature(s) across all contrasts",
+                    input$fdr_correction, input$p, input$lfc, n_sig))
+    comparisons_done <- comparisons()
+    if (!is.null(comparisons_done)) {
+      log_msg(sprintf("Contrasts tested: %s", paste(comparisons_done, collapse=", ")))
+    }
+  })
+
+  output$downloadLog <- renderUI({
+    if (length(log_messages()) > 0) {
+      downloadButton("downloadLogFile", "Download Log")
+    }
+  })
+
+  output$downloadLogFile <- downloadHandler(
+    filename = function() {
+      paste0("FragPipe-Analyst_log_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".txt")
+    },
+    content = function(file) {
+      writeLines(log_messages(), file)
+    }
+  )
+
   ##### Download Functions
   # example data
   output$lfq_example <- downloadHandler(

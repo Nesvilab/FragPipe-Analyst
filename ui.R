@@ -1,5 +1,5 @@
 # Define UI for data upload app ----
-VERSION <- "v1.22"
+VERSION <- "v1.23"
 DEBUG <- T
 ENABLE_PEPTIDE_ANALYSIS <- T
 if (ENABLE_PEPTIDE_ANALYSIS) {
@@ -131,6 +131,7 @@ ui <- function(request){shinyUI(
                    ),
                  tags$hr(),
                  menuItem("Advanced Options",tabName="advanced", icon = icon("cogs"),
+                          checkboxInput("contam_rm", "Remove contaminant proteins", value = TRUE),
                           numericInput("min_global_appearance",
                                        "Min percentage of non-missing values globally",
                                        min = 0, max = 100, value = 0),
@@ -269,7 +270,7 @@ ui <- function(request){shinyUI(
                       column(width = 8,
                         h4("Support"),
                         tags$ul(
-                          tags$li(tags$b("Questions/Suggestions/Bug reports: "), "Ask us in ", tags$a(href="https://github.com/Nesvilab/FragPipe-Analyst", target="_blank", "our GitHub forum"), "."),
+                          tags$li(tags$b("Questions/Suggestions/Bug reports: "), "Ask us in ", tags$a(href="https://github.com/Nesvilab/FragPipe-Analyst-doc", target="_blank", "our GitHub forum"), "."),
                           tags$li(tags$b("Documentation/Tutorials: "), "Learn more ", tags$a(href="https://fragpipe-analyst-doc.nesvilab.org/", target="_blank", "here"), "."),
                           tags$li(tags$b("Servers:"), "Our production (stable) server is at ", tags$a(href="https://fragpipe-analyst.org/", target="_blank", "https://fragpipe-analyst.org/"), "but we also provide our latest dev server ", tags$a(href="http://fragpipe-analyst.nesvilab.org/", target="_blank", "http://fragpipe-analyst.nesvilab.org/"), "with most recent updates and bug fixes."),
                         )
@@ -361,9 +362,9 @@ ui <- function(request){shinyUI(
                         tabPanel("Quantification",
                                  value = "quantification_panel",
                                  br(),
-                          fluidRow(
+                          fluidRow(id = "top_action_row",
                               box(
-                                column(6,uiOutput("downloadTable"),offset = 1), 
+                                column(6,uiOutput("downloadTable"),offset = 1),
                                 column(4,uiOutput("downloadButton")), # make the button on same line
                                 width = 4),
                               box(
@@ -371,14 +372,15 @@ ui <- function(request){shinyUI(
                               ),
                               box(
                                 column(5,uiOutput("downloadreport")), # offset for dist between buttons
+                                column(5,uiOutput("downloadLog")),
                                 #tags$br(),
                                 #column(5,uiOutput('downloadPlots')),
                                 width = 4),
                           ), #close first fluidrow
                           # align save button
                           tags$style(type='text/css', "#downloadButton { width:100%; margin-top: 25px;}"), 
-                          tags$style(type='text/css', "#downloadreport { width:100%; vertical-align- middle; margin-top: 25px; 
-                                     margin-bottom: 25px;}"),
+                          tags$style(type='text/css', "#downloadreport { width:100%; margin-top: 25px; margin-bottom: 25px;}"),
+                          tags$style(type='text/css', "#downloadLog { width:100%; margin-top: 25px; margin-bottom: 25px;}"),
                           #tags$style(type='text/css', "#downloadPlots { width:100%; margin-top: 25px;}"),
                           tags$br(), # Blank lines
                           
@@ -534,6 +536,48 @@ ui <- function(request){shinyUI(
                                              shinycssloaders::withSpinner(plotlyOutput("feature_plot"), color = "#3c8dbc")
                                              # downloadButton('downloadProtein', 'Download Plot')
                                              )
+                                           ),
+                                  tabPanel(title = "Dual Comparison",
+                                           fluidRow(
+                                             box(uiOutput("dual_cntrst_1"), width = 5),
+                                             box(uiOutput("dual_cntrst_2"), width = 5),
+                                             box(
+                                               shinyWidgets::dropdownButton(
+                                                 circle = TRUE, status = "default", right = TRUE,
+                                                 icon = icon("gear"), width = "300px",
+                                                 numericInput("dual_alpha",
+                                                              "p-value cutoff",
+                                                              min = 0, max = 1, value = 0.05),
+                                                 numericInput("dual_lfc",
+                                                              "Log2 fold change cutoff",
+                                                              min = 0, max = 10, value = 1),
+                                                 checkboxInput("dual_p_adj",
+                                                               "Use adjusted p-values",
+                                                               value = TRUE),
+                                                 tooltip = tooltipOptions(placement = "left",
+                                                                          title = "customize settings")
+                                               ),
+                                               width = 2
+                                             )
+                                           ),
+                                           fluidRow(
+                                             box(
+                                               tags$p("Points colored red are significant in both, orange in comparison 1 only,
+                                                      blue in comparison 2 only, and grey in neither."),
+                                               width = 12
+                                             )
+                                           ),
+                                           fluidRow(
+                                             shinycssloaders::withSpinner(
+                                               plotOutput("dual_comparison_plot", height = 500),
+                                               color = "#3c8dbc")
+                                           ),
+                                           fluidRow(
+                                             column(6, downloadButton("download_dual_comparison",
+                                                            "Download results table")),
+                                             column(6, downloadButton("download_dual_comparison_plot",
+                                                            "Download scatter plot"))
+                                           )
                                            )
                               ) # tabBox end
                             ) # box or column end
@@ -553,7 +597,13 @@ ui <- function(request){shinyUI(
                                                         "Show scaled version",
                                                         value = T))
                               ),
-                              fluidRow(shinycssloaders::withSpinner(plotlyOutput("pca_plot", height = 600), color = "#3c8dbc"))
+                              fluidRow(shinycssloaders::withSpinner(plotlyOutput("pca_plot", height = 600), color = "#3c8dbc")),
+                              conditionalPanel(
+                                condition = "input.exp == 'TMT'",
+                                fluidRow(column(12, radioButtons("pca_color_by", "Color by:",
+                                                                 choices = c("Condition" = "condition", "Plex" = "plex"),
+                                                                 selected = "condition", inline = TRUE)))
+                              )
                               ),
                      tabPanel(title="Sample Correlation",
                               fluidRow(box(checkboxInput("cor_imputed",
@@ -987,7 +1037,7 @@ ui <- function(request){shinyUI(
                    h3("Need help?"),
                    tags$ul(
                      tags$li("Read our documentation and tutorial ", a(href = 'https://fragpipe-analyst-doc.nesvilab.org/', target='_blank', tags$b('here')), "."), 
-                     tags$li("Report issues and ask questions ", a(href = 'https://github.com/Nesvilab/FragPipe-Analyst', target='_blank', tags$b('here')), "."), 
+                     tags$li("Report issues and ask questions ", a(href = 'https://github.com/Nesvilab/FragPipe-Analyst-doc', target='_blank', tags$b('here')), "."), 
                      tags$li("FragPipe-Analyst is open-source! You are more than welcome to ",a(href = 'https://github.com/MonashProteomics/FragPipe-Analyst', target='_blank', tags$b('contribute')), "."),
                      tags$li('Learn more about our FragPipe', a(href = 'https://fragpipe.nesvilab.org/', target='_blank', tags$b('here')), "."),
                      tags$li("The user manual of original LFQ-Analyst can be accessed",
