@@ -891,12 +891,14 @@ ui <- function(request){shinyUI(
                     column(3, actionButton("kb_gs_run_ora", "Run ORA",
                                            icon = icon("play"))),
                     column(3,
-                      numericInput("kb_gs_p_filter", "p-value \u2264",
-                                   min = 0, max = 1, value = 1, step = 0.01)
+                      numericInput("kb_gs_p_filter", "p-value cutoff",
+                                   min = 0, max = 1, value = 0.05, step = 0.01)
                     ),
                     column(3,
-                      numericInput("kb_gs_adjp_filter", "adj. p-value \u2264",
-                                   min = 0, max = 1, value = 0.05, step = 0.01)
+                      tags$div(style = "margin-top: 26px;",
+                        checkboxInput("kb_gs_use_adjp", "Use adjusted p-value",
+                                      value = TRUE)
+                      )
                     ),
                     column(3,
                       tags$div(style = "margin-top: 26px;",
@@ -915,30 +917,31 @@ ui <- function(request){shinyUI(
               fluidRow(
                 box(title = "ORA Pathway Heatmap", width = 12,
                   fluidRow(
-                    column(4, uiOutput("kb_ora_database_ui")),
-                    column(4, uiOutput("kb_ora_control_ui")),
-                    column(4, uiOutput("kb_ora_contrast_ui"))
-                  ),
-                  fluidRow(
-                    column(4,
-                      sliderInput("kb_ora_top_n", "Top N terms",
-                                  min = 5, max = 100, value = 30, step = 5),
-                      tags$small(style = "color:#888;",
-                        "ranked by min p-value across contrasts")
-                    ),
-                    column(4,
-                      selectInput("kb_ora_value_type", "Heatmap value:",
+                    column(6, uiOutput("kb_ora_database_ui")),
+                    column(6, shinyWidgets::dropdownButton(
+                      circle = TRUE, status = "default", right = TRUE,
+                      icon = icon("gear"), width = "320px",
+                      selectInput("kb_ora_value_type", "Heatmap cell value:",
                                   choices = c(
                                     "log2 Odds Ratio"  = "log2OR",
                                     "p-value (-log10)" = "pvalue",
                                     "Size (hit count)" = "size"
                                   ),
-                                  selected = "log2OR")
-                    ),
-                    column(4,
-                      numericInput("kb_ora_alpha", "p cutoff",
-                                   min = 0, max = 1, value = 0.05, step = 0.01)
-                    )
+                                  selected = "log2OR"),
+                      numericInput("kb_ora_alpha", "p-value cutoff",
+                                   min = 0, max = 1, value = 0.05, step = 0.01),
+                      tags$small(style = "color:#888;",
+                        "Only show terms significant in at least one contrast"),
+                      checkboxInput("kb_ora_use_adjp",
+                                    "Use adjusted p-value for cutoff",
+                                    value = TRUE),
+                      checkboxInput("kb_ora_ctrl_only",
+                                    "Only include control-related comparisons",
+                                    value = TRUE),
+                      uiOutput("kb_ora_control_ui"),
+                      tooltip = tooltipOptions(placement = "left",
+                                               title = "Heatmap settings")
+                    ))
                   ),
                   uiOutput("kb_ora_status_ui"),
                   uiOutput("kb_ora_heatmap_ui")

@@ -3195,21 +3195,20 @@ output$download_density_svg<-downloadHandler(
   # Table data: ORA results with p-value pre-filtering via numeric inputs;
   # Direction/Database/Gene Set filtering handled by DT's built-in column filters
   kb_gs_table_data <- reactive({
-    res   <- kb_gs_ora_results()
-    p_cut <- input$kb_gs_p_filter
-    a_cut <- input$kb_gs_adjp_filter
+    res      <- kb_gs_ora_results()
+    p_cut    <- input$kb_gs_p_filter
+    use_adjp <- isTRUE(input$kb_gs_use_adjp)
 
     validate(need(!is.null(res) && nrow(res) > 0,
       "No ORA results yet \u2014 select databases and click 'Run ORA'."))
 
-    # Apply p-value cutoffs
-    if (!is.null(p_cut) && "p_hyper" %in% colnames(res))
-      res <- dplyr::filter(res, p_hyper <= p_cut)
-    if (!is.null(a_cut) && "p.adjust_hyper" %in% colnames(res))
-      res <- dplyr::filter(res, p.adjust_hyper <= a_cut)
+    # Apply p-value cutoff (adjusted or raw depending on checkbox)
+    p_col <- if (use_adjp) "p.adjust_hyper" else "p_hyper"
+    if (!is.null(p_cut) && p_col %in% colnames(res))
+      res <- dplyr::filter(res, .data[[p_col]] <= p_cut)
 
     validate(need(nrow(res) > 0,
-      "No results pass the current p-value cutoffs."))
+      "No results pass the current p-value cutoff."))
 
     # Direction as factor for dropdown filter
     dir_label <- if ("direction" %in% colnames(res)) {
@@ -3416,36 +3415,31 @@ output$download_density_svg<-downloadHandler(
     }
   })
 
-  # Control condition selector (mirrors PPI panel logic)
+  # Control condition selector (only shown when "control-related only" is checked)
   output$kb_ora_control_ui <- renderUI({
-    req(dep())
+    req(dep(), isTRUE(input$kb_ora_ctrl_only))
     cd <- as.data.frame(SummarizedExperiment::colData(dep()))
     cond_col <- if ("condition" %in% colnames(cd)) "condition" else colnames(cd)[1]
     conds <- sort(unique(as.character(cd[[cond_col]])))
     selectInput("kb_ora_control", "Control condition:", choices = conds)
   })
 
-  # Filtered contrast selector: only bait_vs_<control>
-  output$kb_ora_contrast_ui <- renderUI({
-    req(dep(), input$kb_ora_control)
-    rd <- as.data.frame(SummarizedExperiment::rowData(dep()))
-    all_contrasts <- gsub("_significant$", "",
-                          grep("_significant$", colnames(rd), value = TRUE))
-    ctrl <- input$kb_ora_control
-    filtered <- all_contrasts[grepl(paste0("_vs_", ctrl, "$"), all_contrasts)]
-    if (length(filtered) == 0) filtered <- all_contrasts
-    checkboxGroupInput("kb_ora_contrasts", "Comparisons to include:",
-                       choices = filtered, selected = filtered)
-  })
-
-  # Heatmap UI: placeholder until results are available
+  # Heatmap UI: dynamic height based on number of significant terms
   output$kb_ora_heatmap_ui <- renderUI({
     res <- kb_gs_ora_results()
     db  <- input$kb_ora_database
     if (is.null(db) || is.null(res) || !"var" %in% colnames(res)) return(NULL)
     if (!db %in% unique(res$var)) return(NULL)
+    # Estimate row count for dynamic height
+    db_res   <- dplyr::filter(res, var == db)
+    use_adjp <- isTRUE(input$kb_ora_use_adjp)
+    p_col    <- if (use_adjp && "p.adjust_hyper" %in% colnames(db_res))
+      "p.adjust_hyper" else "p_hyper"
+    alpha    <- if (!is.null(input$kb_ora_alpha)) input$kb_ora_alpha else 0.05
+    n_terms  <- length(unique(db_res$Term[db_res[[p_col]] < alpha]))
+    hm_height <- max(300, min(n_terms * 16 + 80, 2000))
     shinycssloaders::withSpinner(
-      plotOutput("kb_ora_heatmap", height = 520), color = "#3c8dbc")
+      plotOutput("kb_ora_heatmap", height = hm_height), color = "#3c8dbc")
   })
 
   # Heatmap plot: reads from Gene Set Explorer results
@@ -3457,21 +3451,24 @@ output$download_density_svg<-downloadHandler(
     validate(need(nrow(ora_res) > 0,
                   "No ORA results for this database. Run ORA in Gene Set Explorer first."))
 
-    # Apply contrast filter (control condition selection)
-    sel_contrasts <- input$kb_ora_contrasts
-    if (!is.null(sel_contrasts) && length(sel_contrasts) > 0 &&
-        "contrast" %in% colnames(ora_res))
-      ora_res <- dplyr::filter(ora_res, contrast %in% sel_contrasts)
+    # Filter to control-related contrasts if checkbox is checked
+    if (isTRUE(input$kb_ora_ctrl_only) && !is.null(input$kb_ora_control) &&
+        "contrast" %in% colnames(ora_res)) {
+      ctrl <- input$kb_ora_control
+      ora_res <- dplyr::filter(ora_res,
+                               grepl(paste0("_vs_", ctrl, "$"), contrast))
+    }
 
     validate(need(nrow(ora_res) > 0,
-                  "No results after filtering contrasts. Adjust the control condition selection."))
+                  "No results after filtering contrasts. Adjust the control condition."))
 
+    use_adjp <- isTRUE(input$kb_ora_use_adjp)
     tryCatch({
       hm <- plot_ora_heatmap(
         ora_results = ora_res,
-        top_n       = input$kb_ora_top_n,
         value_type  = input$kb_ora_value_type,
-        alpha       = input$kb_ora_alpha
+        alpha       = input$kb_ora_alpha,
+        use_adjp    = use_adjp
       )
       ComplexHeatmap::draw(hm)
     }, error = function(e) {

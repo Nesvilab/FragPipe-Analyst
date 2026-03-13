@@ -76,17 +76,19 @@ read_gmt <- function(file_path) {
 #' @param value_type   One of \code{"log2OR"} (log2 odds ratio),
 #'                     \code{"pvalue"} (-log10 hypergeometric p),
 #'                     or \code{"size"} (hit count)
-#' @param alpha        p-value cutoff for selecting significant terms
+#' @param alpha        p-value cutoff — only terms significant in at least one
+#'                     contrast are shown
+#' @param use_adjp     If TRUE, use adjusted p-value for significance filter
 #' @return ComplexHeatmap object (call \code{draw()} inside renderPlot)
-plot_ora_heatmap <- function(ora_results, top_n = 30,
-                             value_type = "log2OR", alpha = 0.05) {
+plot_ora_heatmap <- function(ora_results, value_type = "log2OR",
+                             alpha = 0.05, use_adjp = TRUE) {
 
   required_cols <- c("Term", "contrast", "log_odds", "p_hyper", "IN")
   missing <- setdiff(required_cols, colnames(ora_results))
   if (length(missing) > 0)
     stop("ORA results missing columns: ", paste(missing, collapse = ", "))
 
-  # ---- 1. Select top terms significant in at least one contrast ----------- #
+  # ---- 1. Select terms significant in at least one contrast --------------- #
 
   # If direction column exists (UP/DOWN), make Term unique per direction
   has_direction <- "direction" %in% colnames(ora_results)
@@ -95,24 +97,20 @@ plot_ora_heatmap <- function(ora_results, top_n = 30,
       dplyr::mutate(Term = paste0(Term, " (", direction, ")"))
   }
 
+  p_col <- if (use_adjp && "p.adjust_hyper" %in% colnames(ora_results))
+    "p.adjust_hyper" else "p_hyper"
+
   sig_terms <- ora_results %>%
-    dplyr::filter(p_hyper < alpha) %>%
+    dplyr::filter(.data[[p_col]] < alpha) %>%
     dplyr::pull(Term) %>%
     unique()
 
   if (length(sig_terms) == 0)
-    stop("No ORA terms significant at p < ", alpha,
-         ".\nTry raising the p-value cutoff or choosing a different database.")
+    stop("No ORA terms with ", if (use_adjp) "adj. " else "",
+         "p < ", alpha, " in any contrast.",
+         "\nTry raising the cutoff or choosing a different database.")
 
-  top_terms <- ora_results %>%
-    dplyr::filter(Term %in% sig_terms) %>%
-    dplyr::group_by(Term) %>%
-    dplyr::summarise(min_p = min(p_hyper, na.rm = TRUE), .groups = "drop") %>%
-    dplyr::arrange(min_p) %>%
-    dplyr::slice_head(n = top_n) %>%
-    dplyr::pull(Term)
-
-  df_sub <- ora_results %>% dplyr::filter(Term %in% top_terms)
+  df_sub <- ora_results %>% dplyr::filter(Term %in% sig_terms)
 
   # ---- 2. Pivot to wide matrix -------------------------------------------- #
   if (value_type == "log2OR") {
