@@ -460,6 +460,125 @@ run_ora_kb_all <- function(dep, alpha = 0.05, backend = "clusterProfiler",
 }
 
 
+# --------------------------------------------------------------------------- #
+#  PTM-SEA (PTM Signature Enrichment Analysis) via fast.ssgsea
+# --------------------------------------------------------------------------- #
+
+#' Get path to the appropriate PTMsigDB GMT file
+#'
+#' @param species One of "human", "mouse", "rat"
+#' @return File path to the GMT file
+get_ptmsigdb_path <- function(species = "human") {
+  species <- tolower(species)
+  if (!species %in% c("human", "mouse", "rat")) species <- "human"
+  file.path("data", "gene_sets", "ptmsigdb",
+            paste0("ptm.sig.db.all.flanking.", species, ".v2.0.0.gmt"))
+}
+
+#' Run PTM-SEA on site-level DE results
+#'
+#' Computes a signed statistic (sign(log2FC) * -log10(p)) per site, maps sites
+#' to PTMsigDB flanking format, and runs fast.ssgsea.
+#'
+#' @param dep       SummarizedExperiment after test_diff() (site-level)
+#' @param contrast  Contrast name (e.g., "A_vs_B")
+#' @param species   "human", "mouse", or "rat"
+#' @param mod_type  PTM modification type suffix for PTMsigDB matching.
+#'                  One of "p" (phospho), "ac" (acetyl), "ub" (ubiquitin),
+#'                  "me" (methyl), "sm" (sumoyl), etc.
+#' @param nperm     Number of permutations for p-value estimation
+#' @param min_size  Minimum gene set size
+#' @return data.frame from fast_ssgsea (set, set_size, ES, NES, p_value, adj_p_value, etc.)
+run_ptmsea <- function(dep, contrast, species = "human", mod_type = "p",
+                       nperm = 1000L, min_size = 5L) {
+  rd <- as.data.frame(SummarizedExperiment::rowData(dep))
+
+  # Validate SequenceWindow column exists
+  if (!"SequenceWindow" %in% colnames(rd))
+    stop("SequenceWindow column missing — PTM-SEA requires site-level data ",
+         "with flanking sequence information.")
+
+  diff_col <- paste0(contrast, "_diff")
+  p_col    <- paste0(contrast, "_p.val")
+  if (!diff_col %in% colnames(rd) || !p_col %in% colnames(rd))
+    stop("Contrast columns not found for: ", contrast)
+
+  lfc   <- rd[[diff_col]]
+  pval  <- rd[[p_col]]
+  seqw  <- rd$SequenceWindow
+
+  # Build signed statistic: sign(logFC) * -log10(p)
+  # Use a floor for p-values to avoid Inf
+  pval[pval < 1e-300] <- 1e-300
+  stat <- sign(lfc) * (-log10(pval))
+
+  # Name by SequenceWindow + modification type marker
+  # PTMsigDB members are e.g. "ARQSRRSTQGVTLTD-p;d" for phospho,
+  # "ARQSRRSTQGVTLTD-ac;u" for acetyl — the suffix must match.
+  mod_suffix <- paste0("-", mod_type)
+  names(stat) <- paste0(toupper(seqw), mod_suffix)
+
+  # Filter out invalid entries
+  keep <- !is.na(stat) & !is.na(seqw) & nchar(trimws(seqw)) > 0
+  stat <- stat[keep]
+
+  # Handle duplicate flanking sequences: keep largest |stat|
+  if (anyDuplicated(names(stat))) {
+    df_dedup <- data.frame(nm = names(stat), val = stat, absval = abs(stat),
+                           stringsAsFactors = FALSE)
+    df_dedup <- df_dedup[order(-df_dedup$absval), ]
+    df_dedup <- df_dedup[!duplicated(df_dedup$nm), ]
+    stat <- setNames(df_dedup$val, df_dedup$nm)
+  }
+
+  if (length(stat) < 10)
+    stop("Too few valid sites (", length(stat), ") for PTM-SEA.")
+
+  # Load PTMsigDB
+  gmt_path <- get_ptmsigdb_path(species)
+  if (!file.exists(gmt_path))
+    stop("PTMsigDB file not found: ", gmt_path)
+  gene_sets <- fast.ssgsea::read_gmt(gmt_path)
+
+  # Run fast_ssgsea
+  fast.ssgsea::fast_ssgsea(
+    stats     = stat,
+    gene_sets = gene_sets,
+    alpha     = 1,
+    nperm     = as.integer(nperm),
+    min_size  = as.integer(min_size),
+    seed      = 42L
+  )
+}
+
+#' Parse a PTMsigDB gene set into expected-up and expected-down site lists
+#'
+#' @param gmt_list  Named list from read_gmt()
+#' @param set_name  Name of the gene set to parse
+#' @param mod_type  Modification type to filter for (e.g. "p", "ac", "ub").
+#'                  If NULL, all modification types are included.
+#' @return List with $up and $down character vectors of bare flanking sequences
+parse_ptmsea_set_sites <- function(gmt_list, set_name, mod_type = NULL) {
+  members <- gmt_list[[set_name]]
+  if (is.null(members)) return(list(up = character(0), down = character(0)))
+
+  # Filter by modification type if specified (e.g. keep only "-p;u"/"-p;d")
+  if (!is.null(mod_type)) {
+    mod_pattern <- paste0("-", mod_type, ";[ud]$")
+    members <- members[grepl(mod_pattern, members)]
+  }
+
+  is_up   <- grepl(";u$", members)
+  is_down <- grepl(";d$", members)
+  # Strip the direction and modification suffixes (e.g., "-p;u" -> bare flanking)
+  strip <- function(x) toupper(gsub("-[a-z]+;[ud]$", "", x))
+
+  list(
+    up   = strip(members[is_up]),
+    down = strip(members[is_down])
+  )
+}
+
 #' GSVA Pathway Heatmap
 #'
 #' Runs GSVA on the normalised expression matrix of \code{dep} and displays

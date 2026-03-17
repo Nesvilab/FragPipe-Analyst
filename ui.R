@@ -868,48 +868,117 @@ ui <- function(request){shinyUI(
 
                 # === Gene Set Explorer ===
                 box(title = "Gene Set Explorer", width = 6,
-                  fluidRow(
-                    column(5, uiOutput("kb_gs_database_ui")),
-                    column(4, checkboxGroupInput("kb_gs_direction", "Direction",
-                                           choices = c("Up" = "UP", "Down" = "DOWN"),
-                                           inline = TRUE, selected = c("UP", "DOWN"))),
-                    column(3, shinyWidgets::dropdownButton(
-                      circle = TRUE, status = "default", right = TRUE,
-                      icon = icon("gear"), width = "300px",
-                      numericInput("kb_gs_p_cutoff", "DE p-value cutoff",
-                                   min = 0, max = 1, value = 0.05),
-                      numericInput("kb_gs_lfc_cutoff", "DE log2 fold change cutoff",
-                                   min = 0, max = 10, value = 1),
-                      checkboxInput("kb_gs_adjust_de",
-                                    "Apply adjusted p-values to select DE results",
-                                    value = TRUE),
-                      tooltip = tooltipOptions(placement = "left",
-                                               title = "customize settings")
-                    ))
-                  ),
-                  fluidRow(
-                    column(3, actionButton("kb_gs_run_ora", "Run ORA",
-                                           icon = icon("play"))),
-                    column(3,
-                      numericInput("kb_gs_p_filter", "p-value cutoff",
-                                   min = 0, max = 1, value = 0.05, step = 0.01)
+                  tabsetPanel(id = "kb_gs_tabset",
+                    # ---- Gene-level ORA tab ----
+                    tabPanel("Gene-level ORA",
+                      fluidRow(
+                        column(5, uiOutput("kb_gs_database_ui")),
+                        column(4, checkboxGroupInput("kb_gs_direction", "Direction",
+                                               choices = c("Up" = "UP", "Down" = "DOWN"),
+                                               inline = TRUE, selected = c("UP", "DOWN"))),
+                        column(3, shinyWidgets::dropdownButton(
+                          circle = TRUE, status = "default", right = TRUE,
+                          icon = icon("gear"), width = "300px",
+                          numericInput("kb_gs_p_cutoff", "DE p-value cutoff",
+                                       min = 0, max = 1, value = 0.05),
+                          numericInput("kb_gs_lfc_cutoff", "DE log2 fold change cutoff",
+                                       min = 0, max = 10, value = 1),
+                          checkboxInput("kb_gs_adjust_de",
+                                        "Apply adjusted p-values to select DE results",
+                                        value = TRUE),
+                          tooltip = tooltipOptions(placement = "left",
+                                                   title = "customize settings")
+                        ))
+                      ),
+                      fluidRow(
+                        column(3, actionButton("kb_gs_run_ora", "Run ORA",
+                                               icon = icon("play"))),
+                        column(3,
+                          numericInput("kb_gs_p_filter", "p-value cutoff",
+                                       min = 0, max = 1, value = 0.05, step = 0.01)
+                        ),
+                        column(3,
+                          tags$div(style = "margin-top: 26px;",
+                            checkboxInput("kb_gs_use_adjp", "Use adjusted p-value",
+                                          value = TRUE)
+                          )
+                        ),
+                        column(3,
+                          tags$div(style = "margin-top: 26px;",
+                            checkboxInput("kb_gs_show_all_genes",
+                                          "Label all genes in gene set",
+                                          value = FALSE)
+                          )
+                        )
+                      ),
+                      uiOutput("kb_gs_color_legend"),
+                      DT::dataTableOutput("kb_gs_table")
                     ),
-                    column(3,
-                      tags$div(style = "margin-top: 26px;",
-                        checkboxInput("kb_gs_use_adjp", "Use adjusted p-value",
-                                      value = TRUE)
-                      )
-                    ),
-                    column(3,
-                      tags$div(style = "margin-top: 26px;",
-                        checkboxInput("kb_gs_show_all_genes",
-                                      "Label all genes in gene set",
-                                      value = FALSE)
+                    # ---- PTM-SEA tab ----
+                    tabPanel("PTM-SEA",
+                      conditionalPanel(
+                        condition = "input.exp == 'TMT-site' || input.exp == 'DIA-site'",
+                        fluidRow(
+                          column(3,
+                            tags$p(style = "margin-top:8px;",
+                              tags$strong("Database:"), " PTMsigDB v2.0")
+                          ),
+                          column(3,
+                            selectInput("kb_ptm_species", "Species:",
+                                        choices = c("Human" = "human",
+                                                    "Mouse" = "mouse",
+                                                    "Rat"   = "rat"),
+                                        selected = "human")
+                          ),
+                          column(3,
+                            selectInput("kb_ptm_mod_type", "Modification:",
+                                        choices = c("Phosphorylation" = "p",
+                                                    "Acetylation"     = "ac",
+                                                    "Ubiquitination"  = "ub",
+                                                    "Methylation"     = "me",
+                                                    "Sumoylation"     = "sm"),
+                                        selected = "p")
+                          ),
+                          column(3, shinyWidgets::dropdownButton(
+                            circle = TRUE, status = "default", right = TRUE,
+                            icon = icon("gear"), width = "300px",
+                            numericInput("kb_ptm_nperm", "Permutations",
+                                         min = 100, max = 100000, value = 1000, step = 100),
+                            numericInput("kb_ptm_min_size", "Min set size",
+                                         min = 1, max = 50, value = 5),
+                            tooltip = tooltipOptions(placement = "left",
+                                                     title = "PTM-SEA settings")
+                          ))
+                        ),
+                        fluidRow(
+                          column(3, actionButton("kb_ptm_run_sea", "Run PTM-SEA",
+                                                 icon = icon("play"))),
+                          column(3,
+                            numericInput("kb_ptm_p_filter", "p-value cutoff",
+                                         min = 0, max = 1, value = 0.05, step = 0.01)
+                          ),
+                          column(3,
+                            tags$div(style = "margin-top: 26px;",
+                              checkboxInput("kb_ptm_use_adjp", "Use adjusted p-value",
+                                            value = TRUE)
+                            )
+                          )
+                        ),
+                        uiOutput("kb_ptm_color_legend"),
+                        DT::dataTableOutput("kb_ptm_table")
+                      ),
+                      conditionalPanel(
+                        condition = "input.exp != 'TMT-site' && input.exp != 'DIA-site'",
+                        tags$div(style = "text-align:center; padding:40px 20px; color:#888;",
+                          icon("info-circle", style = "font-size:24px;"),
+                          tags$p(style = "margin-top:10px;",
+                            "PTM-SEA requires site-level data.",
+                            tags$br(),
+                            "Select TMT (site) or DIA (site) as the data type.")
+                        )
                       )
                     )
-                  ),
-                  uiOutput("kb_gs_color_legend"),
-                  DT::dataTableOutput("kb_gs_table")
+                  )
                 )
               ),
 

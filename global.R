@@ -39,6 +39,7 @@ library(RColorBrewer)
 library(data.table)
 library(visNetwork)
 library(GSVA)
+library(fast.ssgsea)
 
 conflict_prefer("box", "shinydashboard")
 conflict_prefer("select", "dplyr")

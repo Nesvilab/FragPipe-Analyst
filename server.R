@@ -3094,6 +3094,7 @@ output$download_density_svg<-downloadHandler(
   observeEvent(input$kb_resetPlot, {
     # Clear gene-set table selection and reset volcano to default labels
     DT::selectRows(kb_gs_table_proxy, NULL)
+    DT::selectRows(kb_ptm_table_proxy, NULL)
     session$resetBrush("kb_protein_brush")
   })
 
@@ -3296,16 +3297,204 @@ output$download_density_svg<-downloadHandler(
   })
 
   # ===========================================================================
+  # PTM-SEA (site-level enrichment via fast.ssgsea + PTMsigDB)
+  # ===========================================================================
+
+  kb_ptm_results <- reactiveVal(NULL)
+
+  # Run PTM-SEA button
+  observeEvent(input$kb_ptm_run_sea, {
+    req(dep(), input$kb_contrast)
+    # Validate site-level data (check both metadata and input$exp due to TMT-site level bug)
+    is_site <- metadata(dep())$level == "site" ||
+               input$exp %in% c("TMT-site", "DIA-site")
+    validate(need(is_site, "PTM-SEA requires site-level data."))
+    validate(need("SequenceWindow" %in% colnames(SummarizedExperiment::rowData(dep())),
+                  "SequenceWindow column missing from site data."))
+
+    species  <- input$kb_ptm_species %||% "human"
+    mod_type <- input$kb_ptm_mod_type %||% "p"
+    nperm    <- input$kb_ptm_nperm %||% 1000L
+    min_size <- input$kb_ptm_min_size %||% 5L
+
+    withProgress(message = "Running PTM-SEA ...", value = 0.2, {
+      result <- tryCatch(
+        run_ptmsea(dep(), contrast = input$kb_contrast,
+                   species = species, mod_type = mod_type,
+                   nperm = nperm, min_size = min_size),
+        error = function(e) {
+          showNotification(paste0("PTM-SEA error: ", e$message),
+                           type = "error", duration = 8)
+          NULL
+        }
+      )
+      incProgress(0.8)
+    })
+
+    kb_ptm_results(result)
+    DT::selectRows(kb_ptm_table_proxy, NULL)
+  })
+
+  # PTM-SEA filtered table data
+  kb_ptm_table_data <- reactive({
+    res      <- kb_ptm_results()
+    p_cut    <- input$kb_ptm_p_filter
+    use_adjp <- isTRUE(input$kb_ptm_use_adjp)
+
+    validate(need(!is.null(res) && nrow(res) > 0,
+      "No PTM-SEA results yet \u2014 click 'Run PTM-SEA'."))
+
+    p_col <- if (use_adjp) "adj_p_value" else "p_value"
+    if (!is.null(p_cut) && p_col %in% colnames(res))
+      res <- dplyr::filter(res, .data[[p_col]] <= p_cut)
+
+    validate(need(nrow(res) > 0, "No results pass the current p-value cutoff."))
+
+    data.frame(
+      `Set Name`     = res$set,
+      `Set Size`     = res$set_size,
+      ES             = round(res$ES, 4),
+      NES            = round(res$NES, 4),
+      `p-value`      = res$p_value,
+      `adj. p-value` = res$adj_p_value,
+      check.names    = FALSE,
+      stringsAsFactors = FALSE
+    )
+  })
+
+  # PTM-SEA DT table (single-select)
+  output$kb_ptm_table <- DT::renderDataTable({
+    df <- tryCatch(kb_ptm_table_data(), error = function(e) {
+      validate(need(FALSE, conditionMessage(e)))
+    })
+    num_cols <- intersect(c("ES", "NES", "p-value", "adj. p-value"), colnames(df))
+    DT::datatable(
+      df,
+      selection = list(mode = "single", selected = NULL),
+      rownames  = FALSE,
+      filter    = "top",
+      options   = list(pageLength = 10, scrollX = TRUE, scrollY = "280px", dom = "tp")
+    ) %>%
+      DT::formatSignif(columns = num_cols, digits = 4)
+  })
+
+  kb_ptm_table_proxy <- DT::dataTableProxy("kb_ptm_table")
+
+  # PTM-SEA color legend (expected up = red, expected down = blue)
+  output$kb_ptm_color_legend <- renderUI({
+    sel <- input$kb_ptm_table_rows_selected
+    if (is.null(sel) || length(sel) == 0L) return(NULL)
+    tbl <- tryCatch(kb_ptm_table_data(), error = function(e) NULL)
+    if (is.null(tbl)) return(NULL)
+    set_name <- tbl[["Set Name"]][sel]
+
+    make_swatch <- function(col, label) {
+      tags$span(style = "margin-right:14px; white-space:nowrap;",
+        tags$span(style = paste0(
+          "display:inline-block; width:12px; height:12px; ",
+          "border-radius:2px; margin-right:4px; vertical-align:middle; ",
+          "background-color:", col, ";")),
+        tags$span(style = "font-size:12px; vertical-align:middle;", label)
+      )
+    }
+    tags$div(style = "padding:4px 0 6px 0; line-height:1.8;",
+      make_swatch("#e74c3c", paste0(set_name, " (expected up)")),
+      make_swatch("#3498db", paste0(set_name, " (expected down)"))
+    )
+  })
+
+  # ===========================================================================
   # VOLCANO (multi-set gene highlighting from table row selection)
   # ===========================================================================
 
   kb_volcano_input <- reactive({
     req(dep(), input$kb_contrast)
 
+    # Access all reactive inputs upfront so Shiny registers them as
+    # dependencies regardless of which branch executes below.
     selected_rows <- input$kb_gs_table_rows_selected
-    gene_set_list <- NULL
+    ptm_sel       <- input$kb_ptm_table_rows_selected
+    active_tab    <- input$kb_gs_tabset
 
-    if (!is.null(selected_rows) && length(selected_rows) > 0L) {
+    gene_set_list <- NULL
+    ptm_colors    <- NULL
+
+    if (identical(active_tab, "PTM-SEA") &&
+        !is.null(ptm_sel) && length(ptm_sel) == 1L) {
+      # --- PTM-SEA volcano overlay (site-level, single-select) ---
+      ptm_tbl <- tryCatch(kb_ptm_table_data(), error = function(e) NULL)
+      if (!is.null(ptm_tbl) && nrow(ptm_tbl) >= ptm_sel) {
+        set_name <- ptm_tbl[["Set Name"]][ptm_sel]
+        species  <- input$kb_ptm_species %||% "human"
+        gmt_path <- get_ptmsigdb_path(species)
+
+        if (file.exists(gmt_path)) {
+          # Use the app's own read_gmt to preserve ;u/;d suffixes
+          gmt      <- read_gmt(gmt_path)
+          mod_type <- input$kb_ptm_mod_type %||% "p"
+          parsed   <- parse_ptmsea_set_sites(gmt, set_name, mod_type = mod_type)
+          rd     <- as.data.frame(SummarizedExperiment::rowData(dep()))
+
+          # Build volcano name for each row — must replicate the exact same
+          # branching logic used in plot_volcano_customized so labels match.
+          exp_type  <- metadata(dep())$exp
+          lvl_type  <- metadata(dep())$level
+          show_gene <- isTRUE(input$kb_show_gene)
+
+          if (!show_gene) {
+            # show_gene=FALSE: TMT peptide/site and DIA site/peptide all use Index
+            volcano_names <- rd$Index
+          } else if (exp_type == "TMT") {
+            if (lvl_type == "site") {
+              volcano_names <- paste0(rd$Gene, "_", gsub(".*_", "", rd$ID))
+            } else {
+              # TMT-site stores level="peptide" (known bug) — volcano uses Gene_Peptide
+              volcano_names <- paste0(rd$Gene, "_", rd$Peptide)
+            }
+          } else if (exp_type == "DIA") {
+            if (lvl_type == "site") {
+              volcano_names <- paste0(rd$Gene, "_", gsub(".*_", "", rd$ID))
+            } else {
+              if ("Gene" %in% colnames(rd))
+                volcano_names <- paste0(rd$Gene, "_", rd$Peptide)
+              else
+                volcano_names <- paste0(rd$Genes, "_", rd$Stripped.Sequence)
+            }
+          } else {
+            # LFQ or other — fallback
+            volcano_names <- rd$Index
+          }
+
+          # Map flanking sequences back to volcano names via SequenceWindow
+          sw_upper <- toupper(trimws(rd$SequenceWindow))
+          map_flanking_to_names <- function(flanking_seqs) {
+            if (length(flanking_seqs) == 0L) return(character(0L))
+            matched <- which(sw_upper %in% flanking_seqs)
+            if (length(matched) == 0L) return(character(0L))
+            unique(volcano_names[matched])
+          }
+
+          up_names   <- map_flanking_to_names(parsed$up)
+          down_names <- map_flanking_to_names(parsed$down)
+
+          gene_set_list <- list()
+          if (length(up_names) > 0L)
+            gene_set_list[[paste0(set_name, " (expected up)")]] <- up_names
+          if (length(down_names) > 0L)
+            gene_set_list[[paste0(set_name, " (expected down)")]] <- down_names
+
+          gene_set_list <- Filter(function(x) length(x) > 0L, gene_set_list)
+          if (length(gene_set_list) == 0L) {
+            gene_set_list <- NULL
+          } else {
+            # Red for expected-up, blue for expected-down
+            ptm_colors <- c("#e74c3c", "#3498db")[seq_along(gene_set_list)]
+          }
+        }
+      }
+
+    } else if (!is.null(selected_rows) && length(selected_rows) > 0L) {
+      # --- Gene-level ORA volcano overlay ---
       rows      <- head(selected_rows, 5L)   # cap at 5 sets
       tbl       <- tryCatch(kb_gs_table_data(), error = function(e) NULL)
       col_cache <- kb_gs_collection_cache()
@@ -3373,8 +3562,9 @@ output$download_density_svg<-downloadHandler(
       alpha           = input$kb_alpha,
       show_gene       = input$kb_show_gene,
       gene_set_list   = gene_set_list,
-      gene_set_colors = if (!is.null(gene_set_list))
-        KB_GS_COLORS[seq_along(gene_set_list)] else NULL
+      gene_set_colors = if (!is.null(ptm_colors)) ptm_colors
+        else if (!is.null(gene_set_list)) KB_GS_COLORS[seq_along(gene_set_list)]
+        else NULL
     )
   })
 
