@@ -3703,14 +3703,75 @@ output$download_density_svg<-downloadHandler(
   })
 
   observeEvent(input$kb_run_ppi, {
-    output$kb_ppi_network <- visNetwork::renderVisNetwork({
-      req(input$kb_ppi_contrast)
-      plot_ppi_network(
-        dep           = dep(),
-        contrast      = input$kb_ppi_contrast,
-        lfc_threshold = input$kb_ppi_lfc,
-        alpha         = input$kb_ppi_alpha,
-        string_score  = input$kb_ppi_score
+    result <- plot_ppi_network(
+      dep           = dep(),
+      contrast      = input$kb_ppi_contrast,
+      lfc_threshold = input$kb_ppi_lfc,
+      alpha         = input$kb_ppi_alpha,
+      string_score  = input$kb_ppi_score,
+      species_id    = as.integer(input$kb_ppi_species %||% "9606")
+    )
+    output$kb_ppi_network <- visNetwork::renderVisNetwork({ result$network })
+    output$kb_ppi_legend_ui <- renderUI({
+      ppi_legend_html(
+        max_fc    = result$meta$max_fc,
+        score_min = result$meta$score_min,
+        p_min     = result$meta$p_min,
+        p_max     = result$meta$p_max
+      )
+    })
+  })
+
+  # --- Multi-bait PPI network ---
+  output$kb_multi_control_ui <- renderUI({
+    req(dep())
+    conditions <- unique(SummarizedExperiment::colData(dep())$condition)
+    selectInput("kb_multi_control", "Control condition:", choices = conditions)
+  })
+
+  output$kb_multi_contrasts_ui <- renderUI({
+    req(dep(), input$kb_multi_control)
+    rd            <- as.data.frame(SummarizedExperiment::rowData(dep()))
+    all_contrasts <- gsub("_significant$", "",
+                          grep("_significant$", colnames(rd), value = TRUE))
+    ctrl          <- input$kb_multi_control
+    filtered      <- all_contrasts[grepl(paste0("_vs_", ctrl, "$"), all_contrasts)]
+    if (length(filtered) == 0) filtered <- all_contrasts
+    checkboxGroupInput("kb_multi_contrasts", "Baits (select 2+):",
+                       choices = filtered, selected = filtered)
+  })
+
+  output$kb_multi_ppi_ui <- renderUI({
+    req(input$kb_run_multi_ppi)
+    shinycssloaders::withSpinner(
+      visNetwork::visNetworkOutput("kb_multi_ppi_network", height = "500px"),
+      color = "#3c8dbc")
+  })
+
+  observeEvent(input$kb_run_multi_ppi, {
+    req(input$kb_multi_contrasts)
+    validate(need(length(input$kb_multi_contrasts) >= 2,
+                  "Select at least 2 bait contrasts."))
+    result <- plot_ppi_network_multi(
+      dep           = dep(),
+      contrasts     = input$kb_multi_contrasts,
+      lfc_threshold = input$kb_multi_lfc,
+      alpha         = input$kb_multi_alpha,
+      string_score  = input$kb_multi_score,
+      species_id    = as.integer(input$kb_multi_species %||% "9606")
+    )
+    output$kb_multi_ppi_network <- visNetwork::renderVisNetwork({ result$network })
+    output$kb_multi_legend_ui <- renderUI({
+      bait_palette <- c("#e74c3c", "#3498db", "#2ecc71", "#f39c12",
+                        "#9b59b6", "#1abc9c", "#e67e22", "#34495e")
+      bait_names <- gsub("_vs_.*", "", input$kb_multi_contrasts)
+      bait_colors <- bait_palette[seq_along(bait_names)]
+      ppi_multi_legend_html(
+        bait_names = bait_names,
+        bait_colors = bait_colors,
+        score_min   = result$meta$score_min,
+        p_min       = result$meta$p_min,
+        p_max       = result$meta$p_max
       )
     })
   })
