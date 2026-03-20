@@ -3098,6 +3098,12 @@ output$download_density_svg<-downloadHandler(
     session$resetBrush("kb_protein_brush")
   })
 
+  # When contrast changes, clear table selections so stale highlights don't persist
+  observeEvent(input$kb_contrast, {
+    DT::selectRows(kb_gs_table_proxy, NULL)
+    DT::selectRows(kb_ptm_table_proxy, NULL)
+  }, ignoreInit = TRUE)
+
   output$kb_downloadVolcano <- downloadHandler(
     filename = function() paste0("Volcano_", input$kb_contrast, ".pdf"),
     content  = function(file) {
@@ -3154,11 +3160,13 @@ output$download_density_svg<-downloadHandler(
     lfc       <- input$kb_gs_lfc_cutoff
     adj_de    <- input$kb_gs_adjust_de
 
+    t_total <- proc.time()[["elapsed"]]
     withProgress(message = "Running ORA …", value = 0, {
       n <- length(dbs)
       all_res <- lapply(seq_along(dbs), function(i) {
         incProgress(1 / n, detail = dbs[i])
-        tryCatch(
+        t0 <- proc.time()[["elapsed"]]
+        res <- tryCatch(
           suppressWarnings(suppressMessages(
             run_ora_kb_single(dep(), database = dbs[i], contrast = contrast,
                                direction = direction, alpha = alpha,
@@ -3170,9 +3178,14 @@ output$download_density_svg<-downloadHandler(
             NULL
           }
         )
+        message(sprintf("[ORA] %s done in %.1fs", dbs[i],
+                        proc.time()[["elapsed"]] - t0))
+        res
       })
       results <- dplyr::bind_rows(Filter(Negate(is.null), all_res))
     })
+    message(sprintf("[ORA] Total: %.1fs (%d database(s))",
+                    proc.time()[["elapsed"]] - t_total, length(dbs)))
 
     kb_gs_ora_results(if (nrow(results) > 0) results else NULL)
 
@@ -3199,9 +3212,14 @@ output$download_density_svg<-downloadHandler(
     res      <- kb_gs_ora_results()
     p_cut    <- input$kb_gs_p_filter
     use_adjp <- isTRUE(input$kb_gs_use_adjp)
+    cur_contrast <- input$kb_contrast
 
     validate(need(!is.null(res) && nrow(res) > 0,
       "No ORA results yet \u2014 select databases and click 'Run ORA'."))
+
+    # Filter to the selected contrast (built-in databases return all contrasts)
+    if (!is.null(cur_contrast) && "contrast" %in% colnames(res))
+      res <- dplyr::filter(res, contrast == cur_contrast)
 
     # Apply p-value cutoff (adjusted or raw depending on checkbox)
     p_col <- if (use_adjp) "p.adjust_hyper" else "p_hyper"
@@ -3673,27 +3691,6 @@ output$download_density_svg<-downloadHandler(
   # NETWORK ANALYSIS
   # ===========================================================================
 
-  # --- PPI: control condition selector (populated from colData) ---
-  output$kb_ppi_control_ui <- renderUI({
-    req(dep())
-    conditions <- unique(SummarizedExperiment::colData(dep())$condition)
-    selectInput("kb_ppi_control", "Control condition:", choices = conditions)
-  })
-
-  # --- PPI: contrast selector filtered to those comparing vs the chosen control ---
-  output$kb_ppi_contrast_ui <- renderUI({
-    req(dep(), input$kb_ppi_control)
-    rd           <- as.data.frame(SummarizedExperiment::rowData(dep()))
-    all_contrasts <- gsub("_significant$", "",
-                          grep("_significant$", colnames(rd), value = TRUE))
-    ctrl          <- input$kb_ppi_control
-    # Contrasts are "GroupA_vs_GroupB"; keep those where GroupB == control
-    filtered <- all_contrasts[grepl(paste0("_vs_", ctrl, "$"), all_contrasts)]
-    if (length(filtered) == 0) filtered <- all_contrasts   # fallback: show all
-    selectInput("kb_ppi_contrast", "Comparison (bait vs control):",
-                choices = filtered)
-  })
-
   # --- PPI network output ---
   output$kb_ppi_ui <- renderUI({
     req(input$kb_run_ppi)
@@ -3705,11 +3702,13 @@ output$download_density_svg<-downloadHandler(
   observeEvent(input$kb_run_ppi, {
     result <- plot_ppi_network(
       dep           = dep(),
-      contrast      = input$kb_ppi_contrast,
+      contrast      = input$kb_contrast,
       lfc_threshold = input$kb_ppi_lfc,
       alpha         = input$kb_ppi_alpha,
       string_score  = input$kb_ppi_score,
-      species_id    = as.integer(input$kb_ppi_species %||% "9606")
+      species_id    = as.integer(input$kb_ppi_species %||% "9606"),
+      use_adjp      = isTRUE(input$kb_ppi_use_adjp),
+      bait_connected_only = isTRUE(input$kb_ppi_bait_only)
     )
     output$kb_ppi_network <- visNetwork::renderVisNetwork({ result$network })
     output$kb_ppi_legend_ui <- renderUI({
@@ -3723,22 +3722,13 @@ output$download_density_svg<-downloadHandler(
   })
 
   # --- Multi-bait PPI network ---
-  output$kb_multi_control_ui <- renderUI({
-    req(dep())
-    conditions <- unique(SummarizedExperiment::colData(dep())$condition)
-    selectInput("kb_multi_control", "Control condition:", choices = conditions)
-  })
-
   output$kb_multi_contrasts_ui <- renderUI({
-    req(dep(), input$kb_multi_control)
+    req(dep())
     rd            <- as.data.frame(SummarizedExperiment::rowData(dep()))
     all_contrasts <- gsub("_significant$", "",
                           grep("_significant$", colnames(rd), value = TRUE))
-    ctrl          <- input$kb_multi_control
-    filtered      <- all_contrasts[grepl(paste0("_vs_", ctrl, "$"), all_contrasts)]
-    if (length(filtered) == 0) filtered <- all_contrasts
-    checkboxGroupInput("kb_multi_contrasts", "Baits (select 2+):",
-                       choices = filtered, selected = filtered)
+    checkboxGroupInput("kb_multi_contrasts", "Comparisons (select 2+):",
+                       choices = all_contrasts, selected = all_contrasts)
   })
 
   output$kb_multi_ppi_ui <- renderUI({
@@ -3753,12 +3743,14 @@ output$download_density_svg<-downloadHandler(
     validate(need(length(input$kb_multi_contrasts) >= 2,
                   "Select at least 2 bait contrasts."))
     result <- plot_ppi_network_multi(
-      dep           = dep(),
-      contrasts     = input$kb_multi_contrasts,
-      lfc_threshold = input$kb_multi_lfc,
-      alpha         = input$kb_multi_alpha,
-      string_score  = input$kb_multi_score,
-      species_id    = as.integer(input$kb_multi_species %||% "9606")
+      dep                = dep(),
+      contrasts          = input$kb_multi_contrasts,
+      lfc_threshold      = input$kb_multi_lfc,
+      alpha              = input$kb_multi_alpha,
+      string_score       = input$kb_multi_score,
+      species_id         = as.integer(input$kb_multi_species %||% "9606"),
+      use_adjp           = isTRUE(input$kb_multi_use_adjp),
+      bait_connected_only = isTRUE(input$kb_multi_bait_only)
     )
     output$kb_multi_ppi_network <- visNetwork::renderVisNetwork({ result$network })
     output$kb_multi_legend_ui <- renderUI({
@@ -3776,22 +3768,50 @@ output$download_density_svg<-downloadHandler(
     })
   })
 
-  # --- KEGG pathway network ---
-  output$kb_pathway_net_ui <- renderUI({
-    req(input$kb_run_pathway_net)
+  # --- Kinase-Substrate network ---
+  output$kb_ks_net_ui <- renderUI({
+    req(input$kb_run_ks_net)
     shinycssloaders::withSpinner(
-      visNetwork::visNetworkOutput("kb_pathway_network", height = "420px"),
+      visNetwork::visNetworkOutput("kb_ks_network", height = "500px"),
       color = "#3c8dbc")
   })
 
-  observeEvent(input$kb_run_pathway_net, {
-    output$kb_pathway_network <- visNetwork::renderVisNetwork({
-      req(input$kb_kegg_pathway_id, nchar(trimws(input$kb_kegg_pathway_id)) > 0)
-      plot_kegg_pathway_network(
-        pathway_id = trimws(input$kb_kegg_pathway_id),
-        dep        = dep(),
-        contrast   = input$kb_contrast
-      )
+  observeEvent(input$kb_run_ks_net, {
+    ptm_res <- kb_ptm_results()
+    if (is.null(ptm_res) || nrow(ptm_res) == 0) {
+      showNotification("Run PTM-SEA first in the Gene Set Explorer tab.",
+                       type = "warning", duration = 5)
+      return()
+    }
+
+    result <- tryCatch(
+      withProgress(message = "Building kinase-substrate network...", value = 0.3, {
+        res <- plot_kinase_substrate_network(
+          ptmsea_results = ptm_res,
+          dep            = dep(),
+          contrast       = input$kb_contrast,
+          species        = input$kb_ptm_species %||% "human",
+          mod_type       = input$kb_ptm_mod_type %||% "p",
+          nes_cutoff     = input$kb_ks_nes_cutoff %||% 1.5,
+          p_cutoff       = input$kb_ks_p_cutoff %||% 0.05,
+          max_kinases    = input$kb_ks_max_kinases %||% 15,
+          use_adjp       = isTRUE(input$kb_ks_use_adjp)
+        )
+        incProgress(0.7)
+        res
+      }),
+      error = function(e) {
+        showNotification(paste0("KS network error: ", e$message),
+                         type = "error", duration = 8)
+        NULL
+      }
+    )
+
+    if (is.null(result)) return()
+
+    output$kb_ks_network <- visNetwork::renderVisNetwork({ result$network })
+    output$kb_ks_legend_ui <- renderUI({
+      kinase_substrate_legend_html(max_nes = result$meta$max_nes)
     })
   })
 

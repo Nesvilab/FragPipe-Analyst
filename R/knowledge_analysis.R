@@ -1,7 +1,7 @@
 ###############################################################################
 ## Knowledge Based Analysis Functions
 ## Provides: read_gmt, plot_gsva_heatmap, plot_ppi_network,
-##           plot_kegg_pathway_network
+##           plot_ppi_network_multi, plot_kinase_substrate_network
 ###############################################################################
 
 # --------------------------------------------------------------------------- #
@@ -359,16 +359,12 @@ run_ora_kb_single <- function(dep, database, contrast,
           var            = database
         )
     } else {
-      # Built-in database via test_ora_mod (single contrast)
+      # Built-in database via test_ora_mod (all contrasts at once)
       res <- test_ora_mod(dep, databases = database, contrasts = TRUE,
                           direction = dir, log2_threshold = log2_threshold,
                           alpha = alpha, adjust_alpha = adjust_alpha,
                           backend = backend)
       if (is.null(res) || nrow(res) == 0) return(NULL)
-      # Filter to the requested contrast
-      if ("contrast" %in% colnames(res))
-        res <- dplyr::filter(res, contrast == !!contrast)
-      if (nrow(res) == 0) return(NULL)
       res
     }
   }
@@ -785,10 +781,11 @@ plot_gsva_heatmap <- function(dep, database = "Hallmark", gene_sets = NULL,
 
 #' Extract significant DE genes for a contrast
 #' @return data.frame with gene_symbol, diff, padj columns
-.get_de_genes <- function(dep, contrast, lfc_threshold = 1, alpha = 0.05) {
+.get_de_genes <- function(dep, contrast, lfc_threshold = 1, alpha = 0.05,
+                          use_adjp = TRUE) {
   row_data <- as.data.frame(SummarizedExperiment::rowData(dep))
   diff_col <- paste0(contrast, "_diff")
-  padj_col <- paste0(contrast, "_p.adj")
+  padj_col <- paste0(contrast, if (use_adjp) "_p.adj" else "_p.val")
 
   if ("Gene" %in% colnames(row_data)) {
     row_data$gene_symbol <- row_data$Gene
@@ -820,6 +817,7 @@ plot_gsva_heatmap <- function(dep, database = "Hallmark", gene_sets = NULL,
 .fc_to_color <- function(fc, max_fc = 3) {
   max_fc <- max(max_fc, 0.1)  # avoid division by zero
   vapply(fc, function(v) {
+    if (is.na(v)) return("#DCDCDC")  # grey for NA
     v <- max(min(v, max_fc), -max_fc)
     if (v > 0) {
       t <- v / max_fc
@@ -1231,9 +1229,11 @@ ppi_multi_legend_html <- function(bait_names, bait_colors,
 #'         max_fc, score_min, p_min, p_max for legend rendering)
 plot_ppi_network <- function(dep, contrast, bait = NULL,
                              lfc_threshold = 1, alpha = 0.05,
-                             string_score = 0.4, species_id = 9606) {
+                             string_score = 0.4, species_id = 9606,
+                             use_adjp = TRUE,
+                             bait_connected_only = FALSE) {
 
-  de_genes <- .get_de_genes(dep, contrast, lfc_threshold, alpha)
+  de_genes <- .get_de_genes(dep, contrast, lfc_threshold, alpha, use_adjp)
 
   if (nrow(de_genes) == 0) {
     nodes <- data.frame(id = 1, label = "No significant DE genes found",
@@ -1245,9 +1245,36 @@ plot_ppi_network <- function(dep, contrast, bait = NULL,
     ))
   }
 
-  # Infer bait from contrast name (BaitCondition_vs_Control → BaitCondition)
-  if (is.null(bait) || bait == "")
-    bait <- gsub("_vs_.*", "", contrast)
+  # Infer bait from contrast name — try both sides of _vs_
+  if (is.null(bait) || bait == "") {
+    left_side  <- gsub("_vs_.*", "", contrast)
+    right_side <- gsub(".*_vs_", "", contrast)
+    bait <- left_side
+  } else {
+    left_side  <- bait
+    right_side <- NULL
+  }
+
+  # Try to match bait to a gene symbol (exact, case-insensitive, or partial)
+  # Check both sides of the contrast name
+  .match_bait <- function(candidate, gene_syms) {
+    if (candidate %in% gene_syms) return(candidate)
+    ci <- gene_syms[toupper(gene_syms) == toupper(candidate)]
+    if (length(ci) > 0) return(ci[1])
+    partial <- gene_syms[grepl(toupper(candidate), toupper(gene_syms), fixed = TRUE) |
+                         grepl(toupper(gene_syms), toupper(candidate), fixed = TRUE)]
+    if (length(partial) > 0) return(partial[1])
+    NULL
+  }
+
+  gene_syms <- de_genes$gene_symbol
+  bait_gene <- .match_bait(left_side, gene_syms)
+  if (is.null(bait_gene) && !is.null(right_side))
+    bait_gene <- .match_bait(right_side, gene_syms)
+  if (is.null(bait_gene)) {
+    message("[PPI] Could not match bait from contrast '", contrast, "' to any DE gene")
+    bait_gene <- left_side  # fallback — no diamond will be shown
+  }
 
   # --- STRING REST API ---
   string_res <- .query_string_api(de_genes$gene_symbol, species_id, string_score)
@@ -1268,7 +1295,7 @@ plot_ppi_network <- function(dep, contrast, bait = NULL,
   conf_norm   <- conf / p_max_val
   conf_scaled <- 8 + conf_norm * 25  # range 8–33
 
-  is_bait <- de_genes$gene_symbol == bait
+  is_bait <- de_genes$gene_symbol == bait_gene
 
   # All nodes colored by FC (including bait — bait distinguished by shape)
   node_colors <- .fc_to_color(de_genes$diff, max_fc = max_fc)
@@ -1318,6 +1345,27 @@ plot_ppi_network <- function(dep, contrast, bait = NULL,
     edges$width <- 1 + ((edges$score - score_min) / range_w) * 5   # 1–6
   }
 
+  # Filter to bait-connected subnetwork if requested
+  if (bait_connected_only && nrow(edges) > 0) {
+    bait_id <- if (bait_gene %in% nodes$id) bait_gene else nodes$id[1]
+    adj <- list()
+    for (nid in nodes$id) adj[[nid]] <- character(0)
+    for (r in seq_len(nrow(edges))) {
+      f <- edges$from[r]; t <- edges$to[r]
+      if (f %in% names(adj)) adj[[f]] <- c(adj[[f]], t)
+      if (t %in% names(adj)) adj[[t]] <- c(adj[[t]], f)
+    }
+    queue <- bait_id; visited <- character(0)
+    while (length(queue) > 0) {
+      cur <- queue[1]; queue <- queue[-1]
+      if (cur %in% visited) next
+      visited <- c(visited, cur)
+      queue <- c(queue, setdiff(adj[[cur]], visited))
+    }
+    nodes <- nodes[nodes$id %in% visited, ]
+    edges <- edges[edges$from %in% visited & edges$to %in% visited, ]
+  }
+
   vis <- visNetwork::visNetwork(
     nodes, edges,
     main = list(text = paste0("PPI Network: ", contrast),
@@ -1359,7 +1407,8 @@ plot_ppi_network <- function(dep, contrast, bait = NULL,
 #' @return list with $network (visNetwork object) and $meta
 plot_ppi_network_multi <- function(dep, contrasts, lfc_threshold = 1,
                                    alpha = 0.05, string_score = 0.4,
-                                   species_id = 9606) {
+                                   species_id = 9606, use_adjp = TRUE,
+                                   bait_connected_only = FALSE) {
 
   score_min <- string_score
   default_meta <- list(score_min = score_min, p_min = 1, p_max = 10)
@@ -1379,7 +1428,7 @@ plot_ppi_network_multi <- function(dep, contrasts, lfc_threshold = 1,
   bait_names <- gsub("_vs_.*", "", contrasts)
   all_de <- list()
   for (i in seq_along(contrasts)) {
-    de <- .get_de_genes(dep, contrasts[i], lfc_threshold, alpha)
+    de <- .get_de_genes(dep, contrasts[i], lfc_threshold, alpha, use_adjp)
     if (nrow(de) > 0) {
       de$bait     <- bait_names[i]
       de$contrast <- contrasts[i]
@@ -1475,6 +1524,38 @@ plot_ppi_network_multi <- function(dep, contrasts, lfc_threshold = 1,
     edges$width <- 1 + ((edges$score - score_min) / range_w) * 5
   }
 
+  # Filter to bait-connected subnetwork if requested
+  if (bait_connected_only && nrow(edges) > 0) {
+    # Build adjacency list and find connected components via BFS
+    all_node_ids <- nodes$id
+    adj <- list()
+    for (nid in all_node_ids) adj[[nid]] <- character(0)
+    for (r in seq_len(nrow(edges))) {
+      f <- edges$from[r]; t <- edges$to[r]
+      if (f %in% names(adj)) adj[[f]] <- c(adj[[f]], t)
+      if (t %in% names(adj)) adj[[t]] <- c(adj[[t]], f)
+    }
+    # BFS from each bait to find all reachable nodes
+    bait_ids <- intersect(bait_names, all_node_ids)
+    # Also match baits by the same logic as single-bait
+    if (length(bait_ids) == 0) bait_ids <- all_node_ids[1:min(2, length(all_node_ids))]
+    reachable <- character(0)
+    for (bid in bait_ids) {
+      queue <- bid; visited <- character(0)
+      while (length(queue) > 0) {
+        cur <- queue[1]; queue <- queue[-1]
+        if (cur %in% visited) next
+        visited <- c(visited, cur)
+        neighbors <- adj[[cur]]
+        queue <- c(queue, setdiff(neighbors, visited))
+      }
+      reachable <- union(reachable, visited)
+    }
+    # Keep only reachable nodes and their edges
+    nodes <- nodes[nodes$id %in% reachable, ]
+    edges <- edges[edges$from %in% reachable & edges$to %in% reachable, ]
+  }
+
   vis <- visNetwork::visNetwork(
     nodes, edges,
     main = list(text = paste0("Multi-bait PPI (",
@@ -1501,172 +1582,378 @@ plot_ppi_network_multi <- function(dep, contrasts, lfc_threshold = 1,
 }
 
 
-#' KEGG Pathway Internal Network
-#'
-#' Fetches the KGML for a given KEGG pathway and renders an interactive
-#' visNetwork graph where nodes are genes and edges are biological relations
-#' (activation, inhibition, phosphorylation, etc.).  DE fold-change from the
-#' current contrast is overlaid as node colour and size.
-#'
-#' @param pathway_id  KEGG pathway ID, e.g. "hsa04010" (from enrichment ID col)
-#' @param dep         SummarizedExperiment object after test_diff()
-#' @param contrast    Name of the contrast
-#' @return visNetwork object
-plot_kegg_pathway_network <- function(pathway_id, dep, contrast) {
-  # --- Fetch KGML ---
-  kgml_raw <- tryCatch(
-    KEGGREST::keggGet(pathway_id, "kgml"),
-    error = function(e) stop("Failed to fetch KEGG KGML for ", pathway_id, ": ", e$message)
-  )
-  kgml_str <- if (is.list(kgml_raw)) kgml_raw[[1]] else kgml_raw
+# --------------------------------------------------------------------------- #
+#  Kinase-Substrate Network (from PTM-SEA results + PTMsigDB)
+# --------------------------------------------------------------------------- #
 
-  doc <- tryCatch(
-    xml2::read_xml(kgml_str),
-    error = function(e) stop("Failed to parse KEGG KGML: ", e$message)
-  )
+#' Build a kinase–substrate network from PTM-SEA results
+#'
+#' Takes significant kinase sets from PTM-SEA, retrieves their substrate
+#' members from PTMsigDB, matches substrates to the user's DE site data,
+#' and renders a visNetwork with kinase hub nodes and substrate leaf nodes.
+#'
+#' @param ptmsea_results  Data.frame returned by run_ptmsea() (columns: set,
+#'                        NES, p_value, adj_p_value, set_size, ES)
+#' @param dep             SummarizedExperiment (site-level, after test_diff())
+#' @param contrast        Contrast name
+#' @param species         "human", "mouse", or "rat"
+#' @param mod_type        Modification type ("p", "ac", "ub", etc.)
+#' @param nes_cutoff      Minimum |NES| to include a kinase (default 1.5)
+#' @param p_cutoff        Adjusted p-value cutoff for kinases (default 0.05)
+#' @param max_kinases     Maximum number of kinases to display (default 15)
+#' @return list with $network (visNetwork) and $meta (list for legend)
+plot_kinase_substrate_network <- function(ptmsea_results, dep, contrast,
+                                          species = "human", mod_type = "p",
+                                          nes_cutoff = 1.5, p_cutoff = 0.05,
+                                          max_kinases = 15, use_adjp = TRUE) {
 
-  # --- Parse entries (nodes) ---
-  entries <- xml2::xml_find_all(doc, ".//entry")
-  if (length(entries) == 0) {
-    nodes <- data.frame(id = 1, label = "No pathway entries found", color = "#95a5a6")
-    return(visNetwork::visNetwork(nodes, data.frame()))
+  # --- 1. Filter significant kinase sets ---
+  kinase_res <- ptmsea_results[grepl("^KINASE-", ptmsea_results$set), ]
+
+  if (nrow(kinase_res) == 0) {
+    nodes <- data.frame(id = 1, label = "No KINASE sets in PTM-SEA results",
+                        color = "#95a5a6", stringsAsFactors = FALSE)
+    return(list(
+      network = visNetwork::visNetwork(nodes, data.frame()),
+      meta    = list(max_nes = 3, has_substrates = FALSE)
+    ))
   }
 
-  entry_rows <- lapply(entries, function(e) {
-    graphics   <- xml2::xml_find_first(e, ".//graphics")
-    gene_names <- if (!is.na(graphics)) xml2::xml_attr(graphics, "name") else NA_character_
-    data.frame(
-      id         = xml2::xml_attr(e, "id"),
-      kegg_name  = xml2::xml_attr(e, "name"),
-      type       = xml2::xml_attr(e, "type"),
-      label_raw  = gene_names,
-      stringsAsFactors = FALSE
-    )
-  })
-  entry_df <- do.call(rbind, entry_rows)
+  ks_p_col <- if (use_adjp) "adj_p_value" else "p_value"
+  kinase_res <- kinase_res[!is.na(kinase_res[[ks_p_col]]) &
+                           kinase_res[[ks_p_col]] <= p_cutoff &
+                           abs(kinase_res$NES) >= nes_cutoff, ]
 
-  # Keep only gene entries
-  gene_df <- entry_df[!is.na(entry_df$type) & entry_df$type == "gene", ]
-  if (nrow(gene_df) == 0) {
-    nodes <- data.frame(id = 1, label = "No gene entries in pathway", color = "#95a5a6")
-    return(visNetwork::visNetwork(nodes, data.frame()))
+  if (nrow(kinase_res) == 0) {
+    nodes <- data.frame(id = 1,
+                        label = "No kinases pass significance cutoffs",
+                        color = "#95a5a6", stringsAsFactors = FALSE)
+    return(list(
+      network = visNetwork::visNetwork(nodes, data.frame()),
+      meta    = list(max_nes = 3, has_substrates = FALSE)
+    ))
   }
 
-  # Extract first gene symbol from "GENE1, GENE2, ..." label
-  gene_df$label <- sapply(gene_df$label_raw, function(x) {
-    if (is.na(x) || x == "") return("?")
-    trimws(strsplit(x, ",")[[1]][1])
-  })
+  # Sort by |NES| and limit
+  kinase_res <- kinase_res[order(-abs(kinase_res$NES)), ]
+  if (nrow(kinase_res) > max_kinases)
+    kinase_res <- kinase_res[seq_len(max_kinases), ]
 
-  # --- Overlay DE data ---
-  row_data <- as.data.frame(SummarizedExperiment::rowData(dep))
+  # --- 2. Load PTMsigDB and prepare DE data ---
+  gmt_path <- get_ptmsigdb_path(species)
+
+  # Parse the GMT manually to extract both flanking members AND gene_site
+  # annotations from the description field (e.g., "n=32|AKT1_S473|MAPK3_T202")
+  gmt_lines <- readLines(gmt_path, warn = FALSE)
+  gmt_lines <- gmt_lines[nchar(trimws(gmt_lines)) > 0]
+
+  gmt_list       <- list()  # set_name → flanking sequence members
+  gmt_desc       <- list()  # set_name → gene_site pairs from description
+  gmt_flank2site <- list()  # set_name → mapping of flanking → gene_site
+
+  for (line in gmt_lines) {
+    parts <- strsplit(line, "\t")[[1]]
+    if (length(parts) < 3) next
+    set_name <- parts[1]
+    desc_field <- parts[2]
+    members <- parts[seq(3, length(parts))]
+    members <- members[nchar(trimws(members)) > 0]
+    gmt_list[[set_name]] <- members
+
+    # Parse description: "n=32|GENE1_SITE1|GENE2_SITE2|..."
+    desc_parts <- strsplit(desc_field, "\\|")[[1]]
+    gene_sites <- desc_parts[grepl("^[A-Za-z0-9]+_[A-Z][0-9]+$", desc_parts)]
+    gmt_desc[[set_name]] <- toupper(gene_sites)
+
+    # Build flanking → gene_site map (order matches between desc and members)
+    # Description has gene_site entries in same order as flanking members
+    if (length(gene_sites) == length(members)) {
+      gmt_flank2site[[set_name]] <- setNames(toupper(gene_sites), members)
+    }
+  }
+
+  rd <- as.data.frame(SummarizedExperiment::rowData(dep))
   diff_col <- paste0(contrast, "_diff")
   padj_col <- paste0(contrast, "_p.adj")
 
-  if ("Gene" %in% colnames(row_data)) {
-    row_data$gene_symbol <- row_data$Gene
+  # Build flanking key for matching
+  mod_suffix <- paste0("-", mod_type)
+  rd$flank_key <- paste0(toupper(rd$SequenceWindow), mod_suffix)
+
+  # Extract gene name
+  if ("Gene" %in% colnames(rd)) {
+    rd$gene_symbol <- rd$Gene
   } else {
-    row_data$gene_symbol <- gsub("[.].*", "", row_data$name)
+    rd$gene_symbol <- gsub("[.].*", "", rd$name)
   }
 
-  de_map <- row_data %>%
-    dplyr::select(gene_symbol,
-                  diff_val = dplyr::all_of(diff_col),
-                  padj_val = dplyr::all_of(padj_col)) %>%
-    dplyr::distinct(gene_symbol, .keep_all = TRUE)
+  # Build gene_site key from user data (e.g., "AKT1_S473")
+  # Try to extract amino acid + position from the row name/Index
+  rd$gene_site <- NA_character_
+  if ("Index" %in% colnames(rd)) {
+    # Index is often like "A0A1W2PQY6_S123" or "AKT1_S473" or "S473"
+    # Try to match site pattern (single letter + digits) from Index
+    site_match <- regmatches(rd$Index, regexpr("[STY][0-9]+", rd$Index))
+    has_site <- nchar(site_match) > 0 & !is.na(rd$gene_symbol)
+    rd$gene_site[has_site] <- toupper(paste0(rd$gene_symbol[has_site], "_",
+                                              site_match[has_site]))
+  }
+  # Fallback: try extracting from 'name' column
+  if (all(is.na(rd$gene_site)) && "name" %in% colnames(rd)) {
+    site_match <- regmatches(rd$name, regexpr("[STY][0-9]+", rd$name))
+    has_site <- nchar(site_match) > 0 & !is.na(rd$gene_symbol)
+    rd$gene_site[has_site] <- toupper(paste0(rd$gene_symbol[has_site], "_",
+                                              site_match[has_site]))
+  }
 
-  gene_df <- gene_df %>%
-    dplyr::left_join(de_map, by = c("label" = "gene_symbol"))
+  # Site label for display
+  rd$site_label <- ifelse(!is.na(rd$gene_site), rd$gene_site,
+                          paste0(rd$gene_symbol, "_site"))
 
-  # Build visNetwork nodes
-  nodes <- gene_df %>%
-    dplyr::mutate(
-      title = paste0(
-        label,
-        dplyr::if_else(
-          !is.na(diff_val),
-          paste0("<br>log2FC: ", round(diff_val, 3),
-                 "<br>p.adj: ",  signif(padj_val, 3)),
-          "<br>(not DE)"
-        )
-      ),
-      color = dplyr::case_when(
-        !is.na(diff_val) & diff_val > 0  ~ "#e74c3c",
-        !is.na(diff_val) & diff_val < 0  ~ "#3498db",
-        TRUE                              ~ "#95a5a6"
-      ),
-      value = dplyr::if_else(!is.na(diff_val), pmax(abs(diff_val) * 4, 3), 5)
-    ) %>%
-    dplyr::select(id, label, title, color, value)
+  # Build lookup: gene_site → row index in rd (for gene_site matching)
+  # Use match() approach to handle duplicates (keeps first occurrence)
+  gs_valid <- !is.na(rd$gene_site)
+  gene_site_lookup <- setNames(which(gs_valid), rd$gene_site[gs_valid])
+  gene_site_lookup <- gene_site_lookup[!duplicated(names(gene_site_lookup))]
 
-  # --- Parse relations (edges) ---
-  relations <- xml2::xml_find_all(doc, ".//relation")
-  edge_color_map <- c(
-    "activation"         = "#27ae60",
-    "inhibition"         = "#c0392b",
-    "phosphorylation"    = "#8e44ad",
-    "dephosphorylation"  = "#d35400",
-    "ubiquitination"     = "#16a085",
-    "binding/association"= "#f39c12",
-    "indirect effect"    = "#bdc3c7",
-    "state change"       = "#1abc9c",
-    "compound"           = "#e67e22",
-    "hidden compound"    = "#e67e22",
-    "missing interaction"= "#ecf0f1",
-    "unknown"            = "#95a5a6"
+  # Log matching info
+  n_with_gs <- sum(!is.na(rd$gene_site))
+  message("[KS-Net] DE sites with gene_site key: ", n_with_gs, " / ", nrow(rd))
+  message("[KS-Net] Sample DE gene_sites: ",
+          paste(head(rd$gene_site[!is.na(rd$gene_site)], 5), collapse = " | "))
+
+  # --- 3. Build kinase and substrate nodes + edges ---
+  max_nes <- max(abs(kinase_res$NES), na.rm = TRUE)
+
+  kinase_nodes <- data.frame(
+    id    = kinase_res$set,
+    label = gsub("^KINASE-PSP_", "", kinase_res$set),
+    title = paste0("<b>", gsub("^KINASE-PSP_", "", kinase_res$set), "</b>",
+                   "<br>NES: ", round(kinase_res$NES, 3),
+                   "<br>adj.p: ", signif(kinase_res$adj_p_value, 3),
+                   "<br>Set size: ", kinase_res$set_size),
+    color = .nes_to_color(kinase_res$NES, max_nes = max_nes),
+    value = 30 + abs(kinase_res$NES) / max_nes * 20,
+    shape = "diamond",
+    borderWidth = 3,
+    font.size = 16,
+    font.color = "#222222",
+    font.strokeWidth = 3,
+    font.strokeColor = "#ffffff",
+    type  = "kinase",
+    stringsAsFactors = FALSE
   )
 
-  if (length(relations) > 0) {
-    rel_rows <- lapply(relations, function(r) {
-      subtypes   <- xml2::xml_find_all(r, ".//subtype")
-      subtype_nm <- if (length(subtypes) > 0) xml2::xml_attr(subtypes[[1]], "name") else "unknown"
-      data.frame(
-        from    = xml2::xml_attr(r, "entry1"),
-        to      = xml2::xml_attr(r, "entry2"),
-        rel_type = xml2::xml_attr(r, "type"),
-        subtype  = subtype_nm,
+  all_substrate_nodes <- list()
+  all_edges <- list()
+
+  for (i in seq_len(nrow(kinase_res))) {
+    set_name <- kinase_res$set[i]
+    members <- gmt_list[[set_name]]
+    if (is.null(members) || length(members) == 0) next
+
+    # Filter by mod type
+    mod_pattern <- paste0("-", mod_type, "(;[ud])?$")
+    members <- members[grepl(mod_pattern, members)]
+    if (length(members) == 0) next
+
+    # Parse direction
+    is_up   <- grepl(";u$", members)
+    is_down <- grepl(";d$", members)
+    direction <- ifelse(is_up, "up", ifelse(is_down, "down", "unknown"))
+
+    # Get the gene_site descriptions for this set
+    desc_sites <- gmt_desc[[set_name]]   # e.g., c("AKT1_S473", "MAPK3_T202")
+    flank_map  <- gmt_flank2site[[set_name]]  # flanking → gene_site
+
+    for (j in seq_along(members)) {
+      member <- members[j]
+      dir_j  <- direction[j]
+
+      # Try matching by flanking sequence first
+      flank_key <- gsub(";[ud]$", "", member)
+      rd_idx <- match(toupper(flank_key), rd$flank_key)
+
+      # If flanking didn't match, try gene_site matching
+      if (is.na(rd_idx) && !is.null(flank_map)) {
+        gs <- flank_map[member]
+        if (!is.na(gs) && gs %in% rd$gene_site) {
+          rd_idx <- gene_site_lookup[gs]
+        }
+      }
+
+      if (is.na(rd_idx)) next
+      rd_idx <- as.integer(rd_idx)
+
+      # Build substrate node
+      sid     <- rd$flank_key[rd_idx]
+      fc_val  <- rd[[diff_col]][rd_idx]
+      p_val   <- rd[[padj_col]][rd_idx]
+      slabel  <- rd$site_label[rd_idx]
+
+      if (!sid %in% names(all_substrate_nodes)) {
+        all_substrate_nodes[[sid]] <- data.frame(
+          id    = sid,
+          label = slabel,
+          title = paste0("<b>", slabel, "</b>",
+                         "<br>log2FC: ", round(fc_val, 3),
+                         "<br>p.adj: ", signif(p_val, 3)),
+          color = .fc_to_color(fc_val, max_fc = 3),
+          value = 10,
+          shape = "dot",
+          borderWidth = 1,
+          font.size = 11,
+          font.color = "#222222",
+          font.strokeWidth = 2,
+          font.strokeColor = "#ffffff",
+          type  = "substrate",
+          stringsAsFactors = FALSE
+        )
+      }
+
+      all_edges[[length(all_edges) + 1]] <- data.frame(
+        from   = set_name,
+        to     = sid,
+        arrows = "to",
+        color  = if (dir_j == "up") "#e74c3c"
+                 else if (dir_j == "down") "#3498db"
+                 else "#95a5a6",
+        title  = paste0(slabel, " \u2014 expected: ", dir_j, "-regulated"),
+        width  = 1.5,
+        dashes = if (dir_j == "unknown") TRUE else FALSE,
         stringsAsFactors = FALSE
       )
-    })
-    edges_raw <- do.call(rbind, rel_rows)
-    # Keep only gene-to-gene edges
-    edges_raw <- edges_raw[edges_raw$from %in% gene_df$id &
-                           edges_raw$to   %in% gene_df$id, ]
-
-    edges <- edges_raw %>%
-      dplyr::mutate(
-        color = dplyr::if_else(
-          subtype %in% names(edge_color_map),
-          edge_color_map[subtype], "#95a5a6"
-        ),
-        title = subtype,
-        arrows = dplyr::if_else(
-          subtype %in% c("activation", "inhibition",
-                         "phosphorylation", "dephosphorylation", "indirect effect"),
-          "to", "")
-      ) %>%
-      dplyr::select(from, to, color, title, arrows)
-  } else {
-    edges <- data.frame(from = character(), to = character(),
-                        color = character(), title = character(),
-                        arrows = character())
+    }
   }
 
-  visNetwork::visNetwork(
-    nodes, edges,
-    main = list(text  = pathway_id,
-                style = "font-size:13px; font-weight:bold;")
+  substrate_df <- if (length(all_substrate_nodes) > 0)
+    do.call(rbind, all_substrate_nodes) else data.frame()
+  edges_df <- if (length(all_edges) > 0)
+    do.call(rbind, all_edges) else data.frame()
+
+  if (nrow(substrate_df) == 0) {
+    nodes <- dplyr::bind_rows(
+      kinase_nodes,
+      data.frame(id = "no_sub", label = "No substrate matches in DE data",
+                 color = "#95a5a6", value = 10, shape = "dot",
+                 borderWidth = 1, font.size = 12,
+                 font.color = "#222222", font.strokeWidth = 2,
+                 font.strokeColor = "#ffffff", type = "info",
+                 stringsAsFactors = FALSE)
+    )
+    return(list(
+      network = visNetwork::visNetwork(nodes, data.frame()) %>%
+        .vis_select_events() %>%
+        visNetwork::visLayout(randomSeed = 42),
+      meta = list(max_nes = round(max_nes, 1), has_substrates = FALSE)
+    ))
+  }
+
+  nodes <- dplyr::bind_rows(kinase_nodes, substrate_df)
+
+  # --- 4. Render visNetwork ---
+  vis <- visNetwork::visNetwork(
+    nodes, edges_df,
+    main = list(text = paste0("Kinase-Substrate Network: ", contrast),
+                style = "font-size:14px; font-weight:bold;")
   ) %>%
+    visNetwork::visOptions(nodesIdSelection = FALSE) %>%
     .vis_select_events() %>%
     visNetwork::visLayout(randomSeed = 42) %>%
     visNetwork::visPhysics(solver = "forceAtlas2Based",
-                           stabilization = list(iterations = 100)) %>%
-    visNetwork::visLegend(
-      addNodes = data.frame(
-        label = c("Up-regulated", "Down-regulated", "Not significant"),
-        color = c("#e74c3c", "#3498db", "#95a5a6"),
-        stringsAsFactors = FALSE
+                           stabilization = list(iterations = 200),
+                           forceAtlas2Based = list(
+                             gravitationalConstant = -40,
+                             centralGravity = 0.005,
+                             springLength = 120
+                           )) %>%
+    visNetwork::visEdges(smooth = list(type = "continuous"))
+
+  list(
+    network = vis,
+    meta    = list(max_nes = round(max_nes, 1), has_substrates = TRUE)
+  )
+}
+
+
+#' Map NES to color (same red–grey–blue scheme as FC)
+#' @param nes     Numeric vector of NES values
+#' @param max_nes Maximum |NES| for saturation
+#' @return Character vector of hex colors
+.nes_to_color <- function(nes, max_nes = 3) {
+  .fc_to_color(nes, max_fc = max_nes)
+}
+
+
+#' Generate HTML legend for kinase-substrate network
+#'
+#' @param max_nes Maximum |NES| shown in color scale
+#' @return shiny tagList
+kinase_substrate_legend_html <- function(max_nes = 3) {
+  max_nes <- max(round(max_nes, 1), 0.5)
+
+  # NES color gradient (same as FC: blue negative, red positive)
+  nes_vals   <- seq(-max_nes, max_nes, length.out = 11)
+  nes_colors <- .fc_to_color(nes_vals, max_fc = max_nes)
+  nes_grad   <- .css_gradient(nes_colors)
+
+  # Substrate FC color gradient (fixed -3 to 3)
+  fc_vals   <- seq(-3, 3, length.out = 11)
+  fc_colors <- .fc_to_color(fc_vals, max_fc = 3)
+  fc_grad   <- .css_gradient(fc_colors)
+
+  bar_style   <- "height:12px; border-radius:3px; border:1px solid #ccc; "
+  label_style <- "font-size:13px; font-weight:600; color:#444; margin-bottom:2px;"
+  tick_style  <- "font-size:11px; color:#666;"
+
+  htmltools::tagList(
+    htmltools::tags$div(
+      style = "padding:8px 12px; font-family:sans-serif; max-width:320px;",
+
+      # Kinase NES color bar
+      htmltools::tags$div(style = label_style,
+        htmltools::tags$span(
+          style = "display:inline-block; width:12px; height:12px; background:#d5d8dc; border:2px solid #666; transform:rotate(45deg); margin-right:6px; vertical-align:middle;"
+        ),
+        "Kinase node: NES"
       ),
-      useGroups = FALSE
+      htmltools::tags$div(style = paste0(bar_style, "background:", nes_grad, ";")),
+      htmltools::tags$div(
+        style = "display:flex; justify-content:space-between; margin-bottom:10px;",
+        htmltools::tags$span(style = tick_style, paste0("-", max_nes)),
+        htmltools::tags$span(style = tick_style, "0"),
+        htmltools::tags$span(style = tick_style, paste0("+", max_nes))
+      ),
+
+      # Substrate FC color bar
+      htmltools::tags$div(style = label_style,
+        htmltools::tags$span(
+          style = "display:inline-block; width:10px; height:10px; border-radius:50%; background:#d5d8dc; border:1px solid #999; margin-right:6px; vertical-align:middle;"
+        ),
+        "Substrate node: log2 FC"
+      ),
+      htmltools::tags$div(style = paste0(bar_style, "background:", fc_grad, ";")),
+      htmltools::tags$div(
+        style = "display:flex; justify-content:space-between; margin-bottom:10px;",
+        htmltools::tags$span(style = tick_style, "-3"),
+        htmltools::tags$span(style = tick_style, "0"),
+        htmltools::tags$span(style = tick_style, "+3")
+      ),
+
+      # Edge direction legend
+      htmltools::tags$div(style = label_style, "Edge: expected regulation"),
+      htmltools::tags$div(
+        style = "font-size:12px; color:#555; line-height:1.8;",
+        htmltools::tags$span(
+          style = "display:inline-block; width:20px; height:2px; background:#e74c3c; vertical-align:middle; margin-right:4px;"
+        ),
+        htmltools::tags$span("\u2192 up-regulated substrate"),
+        htmltools::tags$br(),
+        htmltools::tags$span(
+          style = "display:inline-block; width:20px; height:2px; background:#3498db; vertical-align:middle; margin-right:4px;"
+        ),
+        htmltools::tags$span("\u2192 down-regulated substrate")
+      )
     )
+  )
 }

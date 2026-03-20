@@ -1026,31 +1026,35 @@ ui <- function(request){shinyUI(
                     tabPanel("PPI Network",
                       br(),
                       fluidRow(
-                        column(4, uiOutput("kb_ppi_control_ui")),
-                        column(4, uiOutput("kb_ppi_contrast_ui")),
-                        column(4,
-                          selectInput("kb_ppi_species", "Species:",
-                                      choices = c("Human" = "9606",
-                                                  "Mouse" = "10090"),
-                                      selected = "9606")
+                        column(6,
+                          p("Uses the comparison selected in the volcano plot above.",
+                            style = "color:#777; font-size:12px; margin-bottom:0;")
+                        ),
+                        column(3, checkboxInput("kb_ppi_bait_only",
+                                                "Bait-connected only", value = FALSE)),
+                        column(3,
+                          actionButton("kb_run_ppi", "Fetch PPI",
+                                       class = "btn-info btn-block")
                         )
                       ),
                       fluidRow(
-                        column(3,
-                          numericInput("kb_ppi_score", "STRING score",
-                                       min = 0, max = 1, value = 0.4, step = 0.05)
-                        ),
-                        column(3,
-                          numericInput("kb_ppi_lfc", "LFC cutoff",
-                                       min = 0, max = 10, value = 1, step = 0.5)
-                        ),
-                        column(3,
-                          numericInput("kb_ppi_alpha", "p cutoff",
-                                       min = 0, max = 1, value = 0.05, step = 0.01)
-                        ),
-                        column(3, br(),
-                          actionButton("kb_run_ppi", "Fetch PPI",
-                                       class = "btn-info btn-block")
+                        column(12,
+                          tags$details(
+                            tags$summary(style = "cursor:pointer; color:#3c8dbc; font-size:12px;",
+                                         icon("sliders"), " Advanced settings"),
+                            fluidRow(
+                              column(2, selectInput("kb_ppi_species", "Species:",
+                                                    choices = c("Human" = "9606", "Mouse" = "10090"),
+                                                    selected = "9606")),
+                              column(2, numericInput("kb_ppi_score", "STRING score",
+                                                     min = 0, max = 1, value = 0.4, step = 0.05)),
+                              column(2, numericInput("kb_ppi_lfc", "LFC cutoff",
+                                                     min = 0, max = 10, value = 1, step = 0.5)),
+                              column(2, numericInput("kb_ppi_alpha", "p cutoff",
+                                                     min = 0, max = 1, value = 0.05, step = 0.01)),
+                              column(4, checkboxInput("kb_ppi_use_adjp", "Use adj. p-value", value = TRUE))
+                            )
+                          )
                         )
                       ),
                       uiOutput("kb_ppi_ui"),
@@ -1061,51 +1065,67 @@ ui <- function(request){shinyUI(
                     tabPanel("Multi-bait",
                       br(),
                       fluidRow(
-                        column(4, uiOutput("kb_multi_control_ui")),
-                        column(4, uiOutput("kb_multi_contrasts_ui")),
-                        column(4,
-                          selectInput("kb_multi_species", "Species:",
-                                      choices = c("Human" = "9606",
-                                                  "Mouse" = "10090"),
-                                      selected = "9606")
+                        column(7, uiOutput("kb_multi_contrasts_ui")),
+                        column(3, checkboxInput("kb_multi_bait_only",
+                                                "Bait-connected only", value = FALSE)),
+                        column(2,
+                          actionButton("kb_run_multi_ppi", "Fetch PPI",
+                                       class = "btn-info btn-block")
                         )
                       ),
                       fluidRow(
-                        column(3,
-                          numericInput("kb_multi_score", "STRING score",
-                                       min = 0, max = 1, value = 0.4, step = 0.05)
-                        ),
-                        column(3,
-                          numericInput("kb_multi_lfc", "LFC cutoff",
-                                       min = 0, max = 10, value = 1, step = 0.5)
-                        ),
-                        column(3,
-                          numericInput("kb_multi_alpha", "p cutoff",
-                                       min = 0, max = 1, value = 0.05, step = 0.01)
-                        ),
-                        column(3, br(),
-                          actionButton("kb_run_multi_ppi", "Fetch PPI",
-                                       class = "btn-info btn-block")
+                        column(12,
+                          tags$details(
+                            tags$summary(style = "cursor:pointer; color:#3c8dbc; font-size:12px;",
+                                         icon("sliders"), " Advanced settings"),
+                            fluidRow(
+                              column(2, selectInput("kb_multi_species", "Species:",
+                                                    choices = c("Human" = "9606", "Mouse" = "10090"),
+                                                    selected = "9606")),
+                              column(2, numericInput("kb_multi_score", "STRING score",
+                                                     min = 0, max = 1, value = 0.4, step = 0.05)),
+                              column(2, numericInput("kb_multi_lfc", "LFC cutoff",
+                                                     min = 0, max = 10, value = 1, step = 0.5)),
+                              column(2, numericInput("kb_multi_alpha", "p cutoff",
+                                                     min = 0, max = 1, value = 0.05, step = 0.01)),
+                              column(4, checkboxInput("kb_multi_use_adjp", "Use adj. p-value", value = TRUE))
+                            )
+                          )
                         )
                       ),
                       uiOutput("kb_multi_ppi_ui"),
                       uiOutput("kb_multi_legend_ui")
                     ),
 
-                    # ---- KEGG Pathway Network tab ----
-                    tabPanel("KEGG Pathway",
+                    # ---- Kinase-Substrate Network tab ----
+                    tabPanel("Kinase-Substrate",
                       br(),
+                      p("Builds a network from PTM-SEA kinase results. ",
+                        "Run PTM-SEA in the Gene Set Explorer first.",
+                        style = "color:#777; font-size:12px;"),
                       fluidRow(
-                        column(8,
-                          textInput("kb_kegg_pathway_id", "KEGG pathway ID:",
-                                    placeholder = "e.g. hsa04010")
+                        column(9,
+                          tags$details(open = "open",
+                            tags$summary(style = "cursor:pointer; color:#3c8dbc; font-size:12px;",
+                                         icon("sliders"), " Settings"),
+                            fluidRow(
+                              column(3, numericInput("kb_ks_nes_cutoff", "|NES| cutoff",
+                                                     min = 0, max = 10, value = 1.5, step = 0.1)),
+                              column(3, numericInput("kb_ks_p_cutoff", "p cutoff",
+                                                     min = 0, max = 1, value = 0.05, step = 0.01)),
+                              column(3, numericInput("kb_ks_max_kinases", "Max kinases",
+                                                     min = 1, max = 50, value = 15, step = 1)),
+                              column(3, checkboxInput("kb_ks_use_adjp", "Use adj. p-value", value = TRUE))
+                            )
+                          )
                         ),
-                        column(4, br(),
-                          actionButton("kb_run_pathway_net", "Fetch Pathway",
-                                       class = "btn-info btn-sm")
+                        column(3,
+                          actionButton("kb_run_ks_net", "Build Network",
+                                       class = "btn-info btn-block")
                         )
                       ),
-                      uiOutput("kb_pathway_net_ui")
+                      uiOutput("kb_ks_net_ui"),
+                      uiOutput("kb_ks_legend_ui")
                     )
 
                   ) # tabsetPanel close
