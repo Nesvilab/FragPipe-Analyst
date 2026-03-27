@@ -943,7 +943,7 @@ ui <- function(request){shinyUI(
                             circle = TRUE, status = "default", right = TRUE,
                             icon = icon("gear"), width = "300px",
                             numericInput("kb_ptm_nperm", "Permutations",
-                                         min = 100, max = 100000, value = 1000, step = 100),
+                                         min = 1000, max = 100000, value = 10000, step = 1000),
                             numericInput("kb_ptm_min_size", "Min set size",
                                          min = 1, max = 50, value = 5),
                             tooltip = tooltipOptions(placement = "left",
@@ -1107,15 +1107,25 @@ ui <- function(request){shinyUI(
                         column(9,
                           tags$details(open = "open",
                             tags$summary(style = "cursor:pointer; color:#3c8dbc; font-size:12px;",
-                                         icon("sliders"), " Settings"),
+                                         icon("sliders"), " Kinase settings"),
                             fluidRow(
                               column(3, numericInput("kb_ks_nes_cutoff", "|NES| cutoff",
                                                      min = 0, max = 10, value = 1.5, step = 0.1)),
-                              column(3, numericInput("kb_ks_p_cutoff", "p cutoff",
+                              column(3, numericInput("kb_ks_p_cutoff", "Kinase p cutoff",
                                                      min = 0, max = 1, value = 0.05, step = 0.01)),
-                              column(3, numericInput("kb_ks_max_kinases", "Max kinases",
-                                                     min = 1, max = 50, value = 15, step = 1)),
-                              column(3, checkboxInput("kb_ks_use_adjp", "Use adj. p-value", value = TRUE))
+                              column(3, checkboxInput("kb_ks_use_adjp", "Kinase: adj. p", value = TRUE)),
+                              column(3, checkboxInput("kb_ks_hide_empty", "Hide kinase w/o substrate", value = TRUE))
+                            )
+                          ),
+                          tags$details(open = "open",
+                            tags$summary(style = "cursor:pointer; color:#3c8dbc; font-size:12px;",
+                                         icon("sliders"), " Substrate settings"),
+                            fluidRow(
+                              column(3, numericInput("kb_ks_site_lfc", "Site |LFC| cutoff",
+                                                     min = 0, max = 10, value = 0.5, step = 0.5)),
+                              column(3, numericInput("kb_ks_site_p", "Site p cutoff",
+                                                     min = 0, max = 1, value = 0.05, step = 0.05)),
+                              column(3, checkboxInput("kb_ks_site_use_adjp", "Substrate: adj. p", value = TRUE))
                             )
                           )
                         ),

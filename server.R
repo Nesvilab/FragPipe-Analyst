@@ -3320,9 +3320,9 @@ output$download_density_svg<-downloadHandler(
 
   kb_ptm_results <- reactiveVal(NULL)
 
-  # Run PTM-SEA button
+  # Run PTM-SEA button — runs all contrasts at once
   observeEvent(input$kb_ptm_run_sea, {
-    req(dep(), input$kb_contrast)
+    req(dep())
     # Validate site-level data (check both metadata and input$exp due to TMT-site level bug)
     is_site <- metadata(dep())$level == "site" ||
                input$exp %in% c("TMT-site", "DIA-site")
@@ -3335,19 +3335,20 @@ output$download_density_svg<-downloadHandler(
     nperm    <- input$kb_ptm_nperm %||% 1000L
     min_size <- input$kb_ptm_min_size %||% 5L
 
-    withProgress(message = "Running PTM-SEA ...", value = 0.2, {
+    t_total <- proc.time()[["elapsed"]]
+    withProgress(message = "Running PTM-SEA (all contrasts) ...", value = 0.1, {
       result <- tryCatch(
-        run_ptmsea(dep(), contrast = input$kb_contrast,
-                   species = species, mod_type = mod_type,
-                   nperm = nperm, min_size = min_size),
+        run_ptmsea_all(dep(), species = species, mod_type = mod_type,
+                       nperm = nperm, min_size = min_size),
         error = function(e) {
           showNotification(paste0("PTM-SEA error: ", e$message),
                            type = "error", duration = 8)
           NULL
         }
       )
-      incProgress(0.8)
+      incProgress(0.9)
     })
+    message(sprintf("[PTM-SEA] Total: %.1fs", proc.time()[["elapsed"]] - t_total))
 
     kb_ptm_results(result)
     DT::selectRows(kb_ptm_table_proxy, NULL)
@@ -3355,12 +3356,17 @@ output$download_density_svg<-downloadHandler(
 
   # PTM-SEA filtered table data
   kb_ptm_table_data <- reactive({
-    res      <- kb_ptm_results()
-    p_cut    <- input$kb_ptm_p_filter
-    use_adjp <- isTRUE(input$kb_ptm_use_adjp)
+    res          <- kb_ptm_results()
+    p_cut        <- input$kb_ptm_p_filter
+    use_adjp     <- isTRUE(input$kb_ptm_use_adjp)
+    cur_contrast <- input$kb_contrast
 
     validate(need(!is.null(res) && nrow(res) > 0,
       "No PTM-SEA results yet \u2014 click 'Run PTM-SEA'."))
+
+    # Filter to the selected contrast
+    if (!is.null(cur_contrast) && "contrast" %in% colnames(res))
+      res <- dplyr::filter(res, contrast == cur_contrast)
 
     p_col <- if (use_adjp) "adj_p_value" else "p_value"
     if (!is.null(p_cut) && p_col %in% colnames(res))
@@ -3664,7 +3670,8 @@ output$download_density_svg<-downloadHandler(
         "contrast" %in% colnames(ora_res)) {
       ctrl <- input$kb_ora_control
       ora_res <- dplyr::filter(ora_res,
-                               grepl(paste0("_vs_", ctrl, "$"), contrast))
+                               grepl(paste0("_vs_", ctrl, "$"), contrast) |
+                               grepl(paste0("^", ctrl, "_vs_"), contrast))
     }
 
     validate(need(nrow(ora_res) > 0,
@@ -3787,15 +3794,18 @@ output$download_density_svg<-downloadHandler(
     result <- tryCatch(
       withProgress(message = "Building kinase-substrate network...", value = 0.3, {
         res <- plot_kinase_substrate_network(
-          ptmsea_results = ptm_res,
-          dep            = dep(),
-          contrast       = input$kb_contrast,
-          species        = input$kb_ptm_species %||% "human",
-          mod_type       = input$kb_ptm_mod_type %||% "p",
-          nes_cutoff     = input$kb_ks_nes_cutoff %||% 1.5,
-          p_cutoff       = input$kb_ks_p_cutoff %||% 0.05,
-          max_kinases    = input$kb_ks_max_kinases %||% 15,
-          use_adjp       = isTRUE(input$kb_ks_use_adjp)
+          ptmsea_results  = ptm_res,
+          dep             = dep(),
+          contrast        = input$kb_contrast,
+          species         = input$kb_ptm_species %||% "human",
+          mod_type        = input$kb_ptm_mod_type %||% "p",
+          nes_cutoff      = input$kb_ks_nes_cutoff %||% 1.5,
+          p_cutoff        = input$kb_ks_p_cutoff %||% 0.05,
+          use_adjp        = isTRUE(input$kb_ks_use_adjp),
+          site_lfc_cutoff = input$kb_ks_site_lfc %||% 0,
+          site_p_cutoff   = input$kb_ks_site_p %||% 1,
+          site_use_adjp   = isTRUE(input$kb_ks_site_use_adjp),
+          hide_empty_kinases = isTRUE(input$kb_ks_hide_empty)
         )
         incProgress(0.7)
         res

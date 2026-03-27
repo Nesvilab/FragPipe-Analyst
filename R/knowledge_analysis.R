@@ -486,7 +486,7 @@ get_ptmsigdb_path <- function(species = "human") {
 #' @param min_size  Minimum gene set size
 #' @return data.frame from fast_ssgsea (set, set_size, ES, NES, p_value, adj_p_value, etc.)
 run_ptmsea <- function(dep, contrast, species = "human", mod_type = "p",
-                       nperm = 1000L, min_size = 5L) {
+                       nperm = 10000L, min_size = 5L) {
   rd <- as.data.frame(SummarizedExperiment::rowData(dep))
 
   # Validate SequenceWindow column exists
@@ -545,6 +545,92 @@ run_ptmsea <- function(dep, contrast, species = "human", mod_type = "p",
     min_size  = as.integer(min_size),
     seed      = 42L
   )
+}
+
+#' Run PTM-SEA across all contrasts
+#'
+#' Loops over every contrast in the SummarizedExperiment, runs fast_ssgsea
+#' for each, and returns a combined data.frame with a \code{contrast} column.
+#' The PTMsigDB GMT is loaded only once.
+#'
+#' @inheritParams run_ptmsea
+#' @return data.frame with columns: contrast, set, set_size, ES, NES,
+#'         p_value, adj_p_value
+run_ptmsea_all <- function(dep, species = "human", mod_type = "p",
+                           nperm = 10000L, min_size = 5L) {
+  rd <- as.data.frame(SummarizedExperiment::rowData(dep))
+
+  if (!"SequenceWindow" %in% colnames(rd))
+    stop("SequenceWindow column missing — PTM-SEA requires site-level data.")
+
+  # Discover all contrasts
+  all_contrasts <- gsub("_significant$", "",
+                        grep("_significant$", colnames(rd), value = TRUE))
+  if (length(all_contrasts) == 0)
+    stop("No contrast columns found in data.")
+
+  # Load PTMsigDB once
+  gmt_path <- get_ptmsigdb_path(species)
+  if (!file.exists(gmt_path))
+    stop("PTMsigDB file not found: ", gmt_path)
+  gene_sets <- fast.ssgsea::read_gmt(gmt_path)
+
+  seqw       <- rd$SequenceWindow
+  mod_suffix <- paste0("-", mod_type)
+
+  all_res <- list()
+  for (contrast in all_contrasts) {
+    diff_col <- paste0(contrast, "_diff")
+    p_col    <- paste0(contrast, "_p.val")
+    if (!diff_col %in% colnames(rd) || !p_col %in% colnames(rd)) next
+
+    lfc  <- rd[[diff_col]]
+    pval <- rd[[p_col]]
+    pval[pval < 1e-300] <- 1e-300
+    stat <- sign(lfc) * (-log10(pval))
+    names(stat) <- paste0(toupper(seqw), mod_suffix)
+
+    keep <- !is.na(stat) & !is.na(seqw) & nchar(trimws(seqw)) > 0
+    stat <- stat[keep]
+
+    if (anyDuplicated(names(stat))) {
+      df_dedup <- data.frame(nm = names(stat), val = stat, absval = abs(stat),
+                             stringsAsFactors = FALSE)
+      df_dedup <- df_dedup[order(-df_dedup$absval), ]
+      df_dedup <- df_dedup[!duplicated(df_dedup$nm), ]
+      stat <- setNames(df_dedup$val, df_dedup$nm)
+    }
+
+    if (length(stat) < 10) {
+      message("[PTM-SEA] Skipping ", contrast, ": too few valid sites (",
+              length(stat), ")")
+      next
+    }
+
+    t0 <- proc.time()[["elapsed"]]
+    res <- tryCatch(
+      fast.ssgsea::fast_ssgsea(
+        stats = stat, gene_sets = gene_sets, alpha = 1,
+        nperm = as.integer(nperm), min_size = as.integer(min_size), seed = 42L
+      ),
+      error = function(e) {
+        message("[PTM-SEA] Error for ", contrast, ": ", e$message)
+        NULL
+      }
+    )
+    message(sprintf("[PTM-SEA] %s done in %.1fs",
+                    contrast, proc.time()[["elapsed"]] - t0))
+
+    if (!is.null(res) && nrow(res) > 0) {
+      res$contrast <- contrast
+      all_res[[length(all_res) + 1]] <- res
+    }
+  }
+
+  if (length(all_res) == 0)
+    stop("PTM-SEA produced no results for any contrast.")
+
+  dplyr::bind_rows(all_res)
 }
 
 #' Parse a PTMsigDB gene set into expected-up and expected-down site lists
@@ -1261,8 +1347,11 @@ plot_ppi_network <- function(dep, contrast, bait = NULL,
     if (candidate %in% gene_syms) return(candidate)
     ci <- gene_syms[toupper(gene_syms) == toupper(candidate)]
     if (length(ci) > 0) return(ci[1])
-    partial <- gene_syms[grepl(toupper(candidate), toupper(gene_syms), fixed = TRUE) |
-                         grepl(toupper(gene_syms), toupper(candidate), fixed = TRUE)]
+    uc <- toupper(candidate)
+    ugs <- toupper(gene_syms)
+    # candidate is substring of gene, or gene is substring of candidate
+    partial <- gene_syms[grepl(uc, ugs, fixed = TRUE) |
+                         vapply(ugs, function(g) grepl(g, uc, fixed = TRUE), FALSE)]
     if (length(partial) > 0) return(partial[1])
     NULL
   }
@@ -1549,7 +1638,7 @@ plot_ppi_network_multi <- function(dep, contrasts, lfc_threshold = 1,
         neighbors <- adj[[cur]]
         queue <- c(queue, setdiff(neighbors, visited))
       }
-      reachable <- union(reachable, visited)
+      reachable <- base::union(reachable, visited)
     }
     # Keep only reachable nodes and their edges
     nodes <- nodes[nodes$id %in% reachable, ]
@@ -1605,9 +1694,15 @@ plot_ppi_network_multi <- function(dep, contrasts, lfc_threshold = 1,
 plot_kinase_substrate_network <- function(ptmsea_results, dep, contrast,
                                           species = "human", mod_type = "p",
                                           nes_cutoff = 1.5, p_cutoff = 0.05,
-                                          max_kinases = 15, use_adjp = TRUE) {
+                                          use_adjp = TRUE,
+                                          site_lfc_cutoff = 0,
+                                          site_p_cutoff = 1,
+                                          site_use_adjp = TRUE,
+                                          hide_empty_kinases = TRUE) {
 
-  # --- 1. Filter significant kinase sets ---
+  # --- 1. Filter to current contrast and significant kinase sets ---
+  if ("contrast" %in% colnames(ptmsea_results))
+    ptmsea_results <- ptmsea_results[ptmsea_results$contrast == contrast, ]
   kinase_res <- ptmsea_results[grepl("^KINASE-", ptmsea_results$set), ]
 
   if (nrow(kinase_res) == 0) {
@@ -1620,9 +1715,27 @@ plot_kinase_substrate_network <- function(ptmsea_results, dep, contrast,
   }
 
   ks_p_col <- if (use_adjp) "adj_p_value" else "p_value"
+  message(sprintf("[KS-Net] %d KINASE sets found. Filtering: |NES| >= %.2f, %s <= %.4f",
+                  nrow(kinase_res), nes_cutoff, ks_p_col, p_cutoff))
+
+  # Log kinases that fail cutoffs for debugging
+  failed <- kinase_res[is.na(kinase_res[[ks_p_col]]) |
+                        kinase_res[[ks_p_col]] > p_cutoff |
+                        abs(kinase_res$NES) < nes_cutoff, ]
+  if (nrow(failed) > 0) {
+    top_failed <- head(failed[order(-abs(failed$NES)), ], 5)
+    for (r in seq_len(nrow(top_failed))) {
+      message(sprintf("[KS-Net]   Excluded: %s (NES=%.2f, %s=%.4f)",
+                      top_failed$set[r], top_failed$NES[r],
+                      ks_p_col, top_failed[[ks_p_col]][r]))
+    }
+  }
+
   kinase_res <- kinase_res[!is.na(kinase_res[[ks_p_col]]) &
                            kinase_res[[ks_p_col]] <= p_cutoff &
                            abs(kinase_res$NES) >= nes_cutoff, ]
+
+  message(sprintf("[KS-Net] %d kinases pass cutoffs", nrow(kinase_res)))
 
   if (nrow(kinase_res) == 0) {
     nodes <- data.frame(id = 1,
@@ -1634,10 +1747,8 @@ plot_kinase_substrate_network <- function(ptmsea_results, dep, contrast,
     ))
   }
 
-  # Sort by |NES| and limit
+  # Sort by |NES|
   kinase_res <- kinase_res[order(-abs(kinase_res$NES)), ]
-  if (nrow(kinase_res) > max_kinases)
-    kinase_res <- kinase_res[seq_len(max_kinases), ]
 
   # --- 2. Load PTMsigDB and prepare DE data ---
   gmt_path <- get_ptmsigdb_path(species)
@@ -1674,7 +1785,7 @@ plot_kinase_substrate_network <- function(ptmsea_results, dep, contrast,
 
   rd <- as.data.frame(SummarizedExperiment::rowData(dep))
   diff_col <- paste0(contrast, "_diff")
-  padj_col <- paste0(contrast, "_p.adj")
+  padj_col <- paste0(contrast, if (site_use_adjp) "_p.adj" else "_p.val")
 
   # Build flanking key for matching
   mod_suffix <- paste0("-", mod_type)
@@ -1750,12 +1861,20 @@ plot_kinase_substrate_network <- function(ptmsea_results, dep, contrast,
   for (i in seq_len(nrow(kinase_res))) {
     set_name <- kinase_res$set[i]
     members <- gmt_list[[set_name]]
-    if (is.null(members) || length(members) == 0) next
+    n_gmt_members <- length(members)
+    if (is.null(members) || n_gmt_members == 0) {
+      message(sprintf("[KS-Net]   %s: 0 members in GMT", set_name))
+      next
+    }
 
     # Filter by mod type
     mod_pattern <- paste0("-", mod_type, "(;[ud])?$")
     members <- members[grepl(mod_pattern, members)]
-    if (length(members) == 0) next
+    if (length(members) == 0) {
+      message(sprintf("[KS-Net]   %s: %d GMT members, 0 match mod type '%s'",
+                      set_name, n_gmt_members, mod_type))
+      next
+    }
 
     # Parse direction
     is_up   <- grepl(";u$", members)
@@ -1765,6 +1884,22 @@ plot_kinase_substrate_network <- function(ptmsea_results, dep, contrast,
     # Get the gene_site descriptions for this set
     desc_sites <- gmt_desc[[set_name]]   # e.g., c("AKT1_S473", "MAPK3_T202")
     flank_map  <- gmt_flank2site[[set_name]]  # flanking → gene_site
+
+    n_matched <- 0L; n_na <- 0L; n_lfc_fail <- 0L; n_p_fail <- 0L; n_pass <- 0L
+
+    # Debug: log first few member keys vs DE keys for this kinase
+    if (length(members) > 0) {
+      sample_gmt <- head(gsub(";[ud]$", "", members), 3)
+      sample_de  <- head(rd$flank_key[!is.na(rd$flank_key)], 3)
+      message(sprintf("[KS-Net]   %s GMT sample: [%s] (nchar=%s)",
+                      set_name,
+                      paste(sample_gmt, collapse=", "),
+                      paste(nchar(sample_gmt), collapse=",")))
+      message(sprintf("[KS-Net]   %s DE  sample: [%s] (nchar=%s)",
+                      set_name,
+                      paste(sample_de, collapse=", "),
+                      paste(nchar(sample_de), collapse=",")))
+    }
 
     for (j in seq_along(members)) {
       member <- members[j]
@@ -1783,6 +1918,7 @@ plot_kinase_substrate_network <- function(ptmsea_results, dep, contrast,
       }
 
       if (is.na(rd_idx)) next
+      n_matched <- n_matched + 1L
       rd_idx <- as.integer(rd_idx)
 
       # Build substrate node
@@ -1790,6 +1926,12 @@ plot_kinase_substrate_network <- function(ptmsea_results, dep, contrast,
       fc_val  <- rd[[diff_col]][rd_idx]
       p_val   <- rd[[padj_col]][rd_idx]
       slabel  <- rd$site_label[rd_idx]
+
+      # Skip substrates with NA values or not passing cutoffs
+      if (is.na(fc_val) || is.na(p_val)) { n_na <- n_na + 1L; next }
+      if (abs(fc_val) < site_lfc_cutoff) { n_lfc_fail <- n_lfc_fail + 1L; next }
+      if (p_val > site_p_cutoff) { n_p_fail <- n_p_fail + 1L; next }
+      n_pass <- n_pass + 1L
 
       if (!sid %in% names(all_substrate_nodes)) {
         all_substrate_nodes[[sid]] <- data.frame(
@@ -1815,21 +1957,32 @@ plot_kinase_substrate_network <- function(ptmsea_results, dep, contrast,
         from   = set_name,
         to     = sid,
         arrows = "to",
-        color  = if (dir_j == "up") "#e74c3c"
-                 else if (dir_j == "down") "#3498db"
-                 else "#95a5a6",
-        title  = paste0(slabel, " \u2014 expected: ", dir_j, "-regulated"),
+        color  = "#888888",
+        title  = paste0(slabel, " \u2014 kinase substrate"),
         width  = 1.5,
-        dashes = if (dir_j == "unknown") TRUE else FALSE,
+        dashes = FALSE,
         stringsAsFactors = FALSE
       )
     }
+    message(sprintf("[KS-Net]   %s: %d members, %d matched DE, %d NA, %d fail LFC, %d fail p, %d pass",
+                    set_name, length(members), n_matched, n_na, n_lfc_fail, n_p_fail, n_pass))
   }
 
   substrate_df <- if (length(all_substrate_nodes) > 0)
     do.call(rbind, all_substrate_nodes) else data.frame()
   edges_df <- if (length(all_edges) > 0)
     do.call(rbind, all_edges) else data.frame()
+
+  # Hide kinases that have no substrates passing the filters
+  n_kinases_before <- nrow(kinase_nodes)
+  if (hide_empty_kinases && nrow(edges_df) > 0) {
+    kinases_with_subs <- unique(edges_df$from)
+    kinase_nodes <- kinase_nodes[kinase_nodes$id %in% kinases_with_subs, ]
+  } else if (hide_empty_kinases && nrow(edges_df) == 0) {
+    kinase_nodes <- kinase_nodes[FALSE, ]
+  }
+  message(sprintf("[KS-Net] Kinases: %d passed enrichment cutoff, %d have substrates in data",
+                  n_kinases_before, nrow(kinase_nodes)))
 
   if (nrow(substrate_df) == 0) {
     nodes <- dplyr::bind_rows(
@@ -1847,6 +2000,12 @@ plot_kinase_substrate_network <- function(ptmsea_results, dep, contrast,
         visNetwork::visLayout(randomSeed = 42),
       meta = list(max_nes = round(max_nes, 1), has_substrates = FALSE)
     ))
+  }
+
+  # Recalculate max_nes from remaining kinases (for legend)
+  if (nrow(kinase_nodes) > 0) {
+    remaining_nes <- kinase_res$NES[kinase_res$set %in% kinase_nodes$id]
+    if (length(remaining_nes) > 0) max_nes <- max(abs(remaining_nes), na.rm = TRUE)
   }
 
   nodes <- dplyr::bind_rows(kinase_nodes, substrate_df)
@@ -1876,12 +2035,31 @@ plot_kinase_substrate_network <- function(ptmsea_results, dep, contrast,
 }
 
 
-#' Map NES to color (same red–grey–blue scheme as FC)
+#' Map NES to color: purple (negative) → grey → orange (positive)
+#' Distinct from .fc_to_color (blue → grey → red) to avoid confusion.
 #' @param nes     Numeric vector of NES values
 #' @param max_nes Maximum |NES| for saturation
 #' @return Character vector of hex colors
 .nes_to_color <- function(nes, max_nes = 3) {
-  .fc_to_color(nes, max_fc = max_nes)
+  max_nes <- max(max_nes, 0.1)
+  vapply(nes, function(v) {
+    if (is.na(v)) return("#DCDCDC")
+    v <- max(min(v, max_nes), -max_nes)
+    if (v > 0) {
+      t <- v / max_nes
+      # grey (#DCDCDC) → orange (#E67E22)
+      r <- as.integer(220 + t * (230 - 220))
+      g <- as.integer(220 - t * (220 - 126))
+      b <- as.integer(220 - t * (220 - 34))
+    } else {
+      t <- abs(v) / max_nes
+      # grey (#DCDCDC) → purple (#8E44AD)
+      r <- as.integer(220 - t * (220 - 142))
+      g <- as.integer(220 - t * (220 - 68))
+      b <- as.integer(220 - t * (220 - 173))
+    }
+    sprintf("#%02x%02x%02x", r, g, b)
+  }, "")
 }
 
 
@@ -1892,12 +2070,12 @@ plot_kinase_substrate_network <- function(ptmsea_results, dep, contrast,
 kinase_substrate_legend_html <- function(max_nes = 3) {
   max_nes <- max(round(max_nes, 1), 0.5)
 
-  # NES color gradient (same as FC: blue negative, red positive)
+  # Kinase NES color gradient (purple → grey → orange)
   nes_vals   <- seq(-max_nes, max_nes, length.out = 11)
-  nes_colors <- .fc_to_color(nes_vals, max_fc = max_nes)
+  nes_colors <- .nes_to_color(nes_vals, max_nes = max_nes)
   nes_grad   <- .css_gradient(nes_colors)
 
-  # Substrate FC color gradient (fixed -3 to 3)
+  # Substrate FC color gradient (blue → grey → red)
   fc_vals   <- seq(-3, 3, length.out = 11)
   fc_colors <- .fc_to_color(fc_vals, max_fc = 3)
   fc_grad   <- .css_gradient(fc_colors)
@@ -1940,19 +2118,13 @@ kinase_substrate_legend_html <- function(max_nes = 3) {
         htmltools::tags$span(style = tick_style, "+3")
       ),
 
-      # Edge direction legend
-      htmltools::tags$div(style = label_style, "Edge: expected regulation"),
+      # Edge legend
       htmltools::tags$div(
-        style = "font-size:12px; color:#555; line-height:1.8;",
+        style = "font-size:12px; color:#555;",
         htmltools::tags$span(
-          style = "display:inline-block; width:20px; height:2px; background:#e74c3c; vertical-align:middle; margin-right:4px;"
+          style = "display:inline-block; width:20px; height:2px; background:#888888; vertical-align:middle; margin-right:4px;"
         ),
-        htmltools::tags$span("\u2192 up-regulated substrate"),
-        htmltools::tags$br(),
-        htmltools::tags$span(
-          style = "display:inline-block; width:20px; height:2px; background:#3498db; vertical-align:middle; margin-right:4px;"
-        ),
-        htmltools::tags$span("\u2192 down-regulated substrate")
+        htmltools::tags$span("\u2192 kinase \u2192 substrate")
       )
     )
   )
