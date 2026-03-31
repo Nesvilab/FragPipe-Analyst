@@ -3315,7 +3315,7 @@ output$download_density_svg<-downloadHandler(
   })
 
   # ===========================================================================
-  # PTM-SEA (site-level enrichment via fast.ssgsea + PTMsigDB)
+  # PTM-SEA (site-level enrichment via ssGSEA2 + PTMsigDB)
   # ===========================================================================
 
   kb_ptm_results <- reactiveVal(NULL)
@@ -3334,12 +3334,13 @@ output$download_density_svg<-downloadHandler(
     mod_type <- input$kb_ptm_mod_type %||% "p"
     nperm    <- input$kb_ptm_nperm %||% 1000L
     min_size <- input$kb_ptm_min_size %||% 5L
+    subsets  <- input$kb_ptm_subsets %||% c("PERT", "PATH", "DISEASE", "KINASE")
 
     t_total <- proc.time()[["elapsed"]]
     withProgress(message = "Running PTM-SEA (all contrasts) ...", value = 0.1, {
       result <- tryCatch(
         run_ptmsea_all(dep(), species = species, mod_type = mod_type,
-                       nperm = nperm, min_size = min_size),
+                       nperm = nperm, min_size = min_size, subsets = subsets),
         error = function(e) {
           showNotification(paste0("PTM-SEA error: ", e$message),
                            type = "error", duration = 8)

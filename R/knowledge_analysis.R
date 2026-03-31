@@ -457,7 +457,7 @@ run_ora_kb_all <- function(dep, alpha = 0.05, backend = "clusterProfiler",
 
 
 # --------------------------------------------------------------------------- #
-#  PTM-SEA (PTM Signature Enrichment Analysis) via fast.ssgsea
+#  PTM-SEA (PTM Signature Enrichment Analysis) via ssGSEA2
 # --------------------------------------------------------------------------- #
 
 #' Get path to the appropriate PTMsigDB GMT file
@@ -471,54 +471,34 @@ get_ptmsigdb_path <- function(species = "human") {
             paste0("ptm.sig.db.all.flanking.", species, ".v2.0.0.gmt"))
 }
 
-#' Run PTM-SEA on site-level DE results
+#' Build a named stat vector for PTM-SEA from DE results
 #'
-#' Computes a signed statistic (sign(log2FC) * -log10(p)) per site, maps sites
-#' to PTMsigDB flanking format, and runs fast.ssgsea.
+#' Extracts sign(logFC) * -log10(p) per site, names by flanking sequence,
+#' deduplicates, and returns a clean named numeric vector.
 #'
-#' @param dep       SummarizedExperiment after test_diff() (site-level)
-#' @param contrast  Contrast name (e.g., "A_vs_B")
-#' @param species   "human", "mouse", or "rat"
-#' @param mod_type  PTM modification type suffix for PTMsigDB matching.
-#'                  One of "p" (phospho), "ac" (acetyl), "ub" (ubiquitin),
-#'                  "me" (methyl), "sm" (sumoyl), etc.
-#' @param nperm     Number of permutations for p-value estimation
-#' @param min_size  Minimum gene set size
-#' @return data.frame from fast_ssgsea (set, set_size, ES, NES, p_value, adj_p_value, etc.)
-run_ptmsea <- function(dep, contrast, species = "human", mod_type = "p",
-                       nperm = 10000L, min_size = 5L) {
-  rd <- as.data.frame(SummarizedExperiment::rowData(dep))
-
-  # Validate SequenceWindow column exists
-  if (!"SequenceWindow" %in% colnames(rd))
-    stop("SequenceWindow column missing — PTM-SEA requires site-level data ",
-         "with flanking sequence information.")
-
+#' @param rd       Row data data.frame from SummarizedExperiment
+#' @param contrast Contrast name
+#' @param mod_type Modification type suffix (e.g. "p", "ac")
+#' @return Named numeric vector (flanking_seq-mod_type → stat)
+.build_ptmsea_stat <- function(rd, contrast, mod_type) {
   diff_col <- paste0(contrast, "_diff")
   p_col    <- paste0(contrast, "_p.val")
   if (!diff_col %in% colnames(rd) || !p_col %in% colnames(rd))
     stop("Contrast columns not found for: ", contrast)
 
-  lfc   <- rd[[diff_col]]
-  pval  <- rd[[p_col]]
-  seqw  <- rd$SequenceWindow
+  lfc  <- rd[[diff_col]]
+  pval <- rd[[p_col]]
+  seqw <- rd$SequenceWindow
 
-  # Build signed statistic: sign(logFC) * -log10(p)
-  # Use a floor for p-values to avoid Inf
   pval[pval < 1e-300] <- 1e-300
   stat <- sign(lfc) * (-log10(pval))
 
-  # Name by SequenceWindow + modification type marker
-  # PTMsigDB members are e.g. "ARQSRRSTQGVTLTD-p;d" for phospho,
-  # "ARQSRRSTQGVTLTD-ac;u" for acetyl — the suffix must match.
   mod_suffix <- paste0("-", mod_type)
   names(stat) <- paste0(toupper(seqw), mod_suffix)
 
-  # Filter out invalid entries
   keep <- !is.na(stat) & !is.na(seqw) & nchar(trimws(seqw)) > 0
   stat <- stat[keep]
 
-  # Handle duplicate flanking sequences: keep largest |stat|
   if (anyDuplicated(names(stat))) {
     df_dedup <- data.frame(nm = names(stat), val = stat, absval = abs(stat),
                            stringsAsFactors = FALSE)
@@ -526,111 +506,211 @@ run_ptmsea <- function(dep, contrast, species = "human", mod_type = "p",
     df_dedup <- df_dedup[!duplicated(df_dedup$nm), ]
     stat <- setNames(df_dedup$val, df_dedup$nm)
   }
-
-  if (length(stat) < 10)
-    stop("Too few valid sites (", length(stat), ") for PTM-SEA.")
-
-  # Load PTMsigDB
-  gmt_path <- get_ptmsigdb_path(species)
-  if (!file.exists(gmt_path))
-    stop("PTMsigDB file not found: ", gmt_path)
-  gene_sets <- fast.ssgsea::read_gmt(gmt_path)
-
-  # Run fast_ssgsea
-  fast.ssgsea::fast_ssgsea(
-    stats     = stat,
-    gene_sets = gene_sets,
-    alpha     = 1,
-    nperm     = as.integer(nperm),
-    min_size  = as.integer(min_size),
-    seed      = 42L
-  )
+  stat
 }
 
-#' Run PTM-SEA across all contrasts
+#' Write a stat vector to a GCT v1.3 file for ssGSEA2
 #'
-#' Loops over every contrast in the SummarizedExperiment, runs fast_ssgsea
-#' for each, and returns a combined data.frame with a \code{contrast} column.
-#' The PTMsigDB GMT is loaded only once.
+#' @param stat     Named numeric vector (site IDs → values)
+#' @param gct_path Output file path
+#' @return The file path (invisibly)
+.write_stat_gct <- function(stat, gct_path) {
+  mat <- matrix(stat, ncol = 1, dimnames = list(names(stat), "sample"))
+  gct <- new("GCT", mat = mat)
+  cmapR::write_gct(gct, gct_path, appenddim = FALSE)
+  invisible(gct_path)
+}
+
+#' Parse ssGSEA2 output GCT files into a tidy data.frame
 #'
-#' @inheritParams run_ptmsea
+#' Reads the scores, p-values, and FDR GCT files produced by run_ssGSEA2()
+#' and combines them into a long-format data.frame. Supports multi-column
+#' (multi-contrast) output.
+#'
+#' @param output_prefix The prefix used for run_ssGSEA2 output
+#' @param output_dir    The directory containing output files
+#' @return data.frame with columns: set, set_size, ES, NES, p_value,
+#'         adj_p_value, contrast
+.parse_ssgsea2_output <- function(output_prefix, output_dir) {
+  scores_path   <- file.path(output_dir, paste0(output_prefix, "-scores.gct"))
+  pvals_path    <- file.path(output_dir, paste0(output_prefix, "-pvalues.gct"))
+  fdr_path      <- file.path(output_dir, paste0(output_prefix, "-fdr-pvalues.gct"))
+  combined_path <- file.path(output_dir, paste0(output_prefix, "-combined.gct"))
+
+  if (!file.exists(scores_path))
+    stop("ssGSEA2 scores output not found: ", scores_path)
+
+  scores_gct <- cmapR::parse_gctx(scores_path)
+  scores_mat <- scores_gct@mat  # rows = gene sets, cols = contrasts
+
+  pvals_mat <- if (file.exists(pvals_path)) {
+    cmapR::parse_gctx(pvals_path)@mat
+  } else {
+    matrix(NA_real_, nrow = nrow(scores_mat), ncol = ncol(scores_mat),
+           dimnames = dimnames(scores_mat))
+  }
+
+  fdr_mat <- if (file.exists(fdr_path)) {
+    cmapR::parse_gctx(fdr_path)@mat
+  } else {
+    matrix(NA_real_, nrow = nrow(scores_mat), ncol = ncol(scores_mat),
+           dimnames = dimnames(scores_mat))
+  }
+
+  # Try to extract set_size from combined GCT row annotations
+  set_sizes <- if (file.exists(combined_path)) {
+    combined_gct <- cmapR::parse_gctx(combined_path)
+    rdesc <- combined_gct@rdesc
+    if ("n.geneset.genes" %in% colnames(rdesc)) {
+      as.integer(rdesc[["n.geneset.genes"]])
+    } else if ("Geneset.size" %in% colnames(rdesc)) {
+      as.integer(rdesc[["Geneset.size"]])
+    } else {
+      rep(NA_integer_, nrow(scores_mat))
+    }
+  } else {
+    rep(NA_integer_, nrow(scores_mat))
+  }
+
+  # Build long-format data.frame across all columns (contrasts)
+  contrast_names <- colnames(scores_mat)
+  all_res <- lapply(seq_along(contrast_names), function(j) {
+    data.frame(
+      set         = rownames(scores_mat),
+      set_size    = set_sizes,
+      ES          = scores_mat[, j],
+      NES         = scores_mat[, j],
+      p_value     = pvals_mat[, j],
+      adj_p_value = fdr_mat[, j],
+      contrast    = contrast_names[j],
+      stringsAsFactors = FALSE
+    )
+  })
+  dplyr::bind_rows(all_res)
+}
+
+#' Run PTM-SEA across all contrasts using ssGSEA2
+#'
+#' Builds stat vectors for all contrasts, writes them as columns in a single
+#' GCT file, and runs ssGSEA2 once with parallel gene-set processing.
+#'
+#' @param dep      SummarizedExperiment after test_diff() (site-level)
+#' @param species  "human", "mouse", or "rat"
+#' @param mod_type PTM modification type suffix for PTMsigDB matching.
+#' @param nperm    Number of permutations for p-value estimation
+#' @param min_size Minimum gene set size (min.overlap in ssGSEA2)
+#' @param subsets  Character vector of PTMsigDB subset prefixes to include.
+#'   Valid values: "PERT", "PATH", "DISEASE", "KINASE". If NULL, all are used.
 #' @return data.frame with columns: contrast, set, set_size, ES, NES,
 #'         p_value, adj_p_value
 run_ptmsea_all <- function(dep, species = "human", mod_type = "p",
-                           nperm = 10000L, min_size = 5L) {
+                           nperm = 1000L, min_size = 5L, subsets = NULL) {
   rd <- as.data.frame(SummarizedExperiment::rowData(dep))
 
   if (!"SequenceWindow" %in% colnames(rd))
     stop("SequenceWindow column missing — PTM-SEA requires site-level data.")
 
-  # Discover all contrasts
   all_contrasts <- gsub("_significant$", "",
                         grep("_significant$", colnames(rd), value = TRUE))
   if (length(all_contrasts) == 0)
     stop("No contrast columns found in data.")
 
-  # Load PTMsigDB once
   gmt_path <- get_ptmsigdb_path(species)
   if (!file.exists(gmt_path))
     stop("PTMsigDB file not found: ", gmt_path)
-  gene_sets <- fast.ssgsea::read_gmt(gmt_path)
 
-  seqw       <- rd$SequenceWindow
-  mod_suffix <- paste0("-", mod_type)
+  # Filter GMT to selected subsets by writing a filtered GMT file
+  # PTMsigDB set names are prefixed: KINASE-*, PATH-*, PERT-*, DISEASE-*
+  if (!is.null(subsets) && length(subsets) > 0 &&
+      length(subsets) < 4) {
+    all_lines <- readLines(gmt_path, warn = FALSE)
+    prefix_pattern <- paste0("^(", paste(subsets, collapse = "|"), ")-")
+    keep <- grepl(prefix_pattern, all_lines)
+    if (sum(keep) == 0)
+      stop("No gene sets match the selected subsets: ",
+           paste(subsets, collapse = ", "))
+    filtered_gmt <- tempfile(fileext = ".gmt")
+    writeLines(all_lines[keep], filtered_gmt)
+    gmt_path <- filtered_gmt
+    on.exit(unlink(filtered_gmt), add = TRUE)
+    message(sprintf("[PTM-SEA] Filtered to %d gene sets (subsets: %s)",
+                    sum(keep), paste(subsets, collapse = ", ")))
+  }
 
-  all_res <- list()
+  # Build stat vectors for all contrasts and collect into a matrix
+  stat_list <- list()
   for (contrast in all_contrasts) {
     diff_col <- paste0(contrast, "_diff")
     p_col    <- paste0(contrast, "_p.val")
     if (!diff_col %in% colnames(rd) || !p_col %in% colnames(rd)) next
 
-    lfc  <- rd[[diff_col]]
-    pval <- rd[[p_col]]
-    pval[pval < 1e-300] <- 1e-300
-    stat <- sign(lfc) * (-log10(pval))
-    names(stat) <- paste0(toupper(seqw), mod_suffix)
-
-    keep <- !is.na(stat) & !is.na(seqw) & nchar(trimws(seqw)) > 0
-    stat <- stat[keep]
-
-    if (anyDuplicated(names(stat))) {
-      df_dedup <- data.frame(nm = names(stat), val = stat, absval = abs(stat),
-                             stringsAsFactors = FALSE)
-      df_dedup <- df_dedup[order(-df_dedup$absval), ]
-      df_dedup <- df_dedup[!duplicated(df_dedup$nm), ]
-      stat <- setNames(df_dedup$val, df_dedup$nm)
-    }
+    stat <- tryCatch(.build_ptmsea_stat(rd, contrast, mod_type),
+                     error = function(e) { message("[PTM-SEA] ", e$message); NULL })
+    if (is.null(stat)) next
 
     if (length(stat) < 10) {
       message("[PTM-SEA] Skipping ", contrast, ": too few valid sites (",
               length(stat), ")")
       next
     }
-
-    t0 <- proc.time()[["elapsed"]]
-    res <- tryCatch(
-      fast.ssgsea::fast_ssgsea(
-        stats = stat, gene_sets = gene_sets, alpha = 1,
-        nperm = as.integer(nperm), min_size = as.integer(min_size), seed = 42L
-      ),
-      error = function(e) {
-        message("[PTM-SEA] Error for ", contrast, ": ", e$message)
-        NULL
-      }
-    )
-    message(sprintf("[PTM-SEA] %s done in %.1fs",
-                    contrast, proc.time()[["elapsed"]] - t0))
-
-    if (!is.null(res) && nrow(res) > 0) {
-      res$contrast <- contrast
-      all_res[[length(all_res) + 1]] <- res
-    }
+    stat_list[[contrast]] <- stat
   }
 
-  if (length(all_res) == 0)
-    stop("PTM-SEA produced no results for any contrast.")
+  if (length(stat_list) == 0)
+    stop("No contrasts had enough valid sites for PTM-SEA.")
 
-  dplyr::bind_rows(all_res)
+  # Merge stat vectors into a single matrix (union of all site IDs)
+  all_sites <- unique(unlist(lapply(stat_list, names)))
+  mat <- matrix(NA_real_, nrow = length(all_sites), ncol = length(stat_list),
+                dimnames = list(all_sites, names(stat_list)))
+  for (cn in names(stat_list)) {
+    s <- stat_list[[cn]]
+    mat[names(s), cn] <- s
+  }
+  # Replace NA with 0 (sites not in a contrast get neutral stat)
+  mat[is.na(mat)] <- 0
+
+  # Write multi-column GCT
+  tmp_dir <- tempfile("ptmsea_all_")
+  dir.create(tmp_dir, recursive = TRUE)
+  on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
+
+  gct_path <- file.path(tmp_dir, "input.gct")
+  t0 <- proc.time()[["elapsed"]]
+  gct <- new("GCT", mat = mat)
+  cmapR::write_gct(gct, gct_path, appenddim = FALSE)
+  t_gct <- proc.time()[["elapsed"]] - t0
+  message(sprintf("[PTM-SEA] Writing GCT (%d sites x %d contrasts): %.1fs",
+                  nrow(mat), ncol(mat), t_gct))
+
+  # Run ssGSEA2 once for all contrasts, with parallel gene-set processing
+  t0 <- proc.time()[["elapsed"]]
+  tryCatch(
+    run_ssGSEA2(
+      input.ds           = gct_path,
+      output.prefix      = "ptmsea",
+      gene.set.databases = gmt_path,
+      output.directory   = tmp_dir,
+      sample.norm.type   = "none",
+      weight             = 0.75,
+      statistic          = "area.under.RES",
+      output.score.type  = "NES",
+      nperm              = as.integer(nperm),
+      min.overlap        = as.integer(min_size),
+      correl.type        = "rank",
+      global.fdr         = FALSE,
+      par                = TRUE,
+      spare.cores        = 1,
+      export.signat.gct  = FALSE,
+      param.file         = FALSE,
+      log.file           = file.path(tmp_dir, "run.log")
+    ),
+    error = function(e) stop("ssGSEA2 failed: ", e$message)
+  )
+  t_sea <- proc.time()[["elapsed"]] - t0
+  message(sprintf("[PTM-SEA] ssGSEA2 computation: %.1fs", t_sea))
+
+  .parse_ssgsea2_output("ptmsea", tmp_dir)
 }
 
 #' Parse a PTMsigDB gene set into expected-up and expected-down site lists
