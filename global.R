@@ -41,6 +41,10 @@ library(visNetwork)
 library(GSVA)
 library(ssGSEA2)
 library(cmapR)
+library(future)
+
+# Allow PTM-SEA (and other ExtendedTasks) to run in background R processes
+plan(multisession)
 
 conflict_prefer("box", "shinydashboard")
 conflict_prefer("select", "dplyr")

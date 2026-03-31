@@ -957,8 +957,11 @@ ui <- function(request){shinyUI(
                           ))
                         ),
                         fluidRow(
-                          column(3, actionButton("kb_ptm_run_sea", "Run PTM-SEA",
-                                                 icon = icon("play"))),
+                          column(3,
+                            actionButton("kb_ptm_run_sea", "Run PTM-SEA",
+                                         icon = icon("play")),
+                            uiOutput("kb_ptm_status", inline = TRUE)
+                          ),
                           column(3,
                             numericInput("kb_ptm_p_filter", "p-value cutoff",
                                          min = 0, max = 1, value = 0.05, step = 0.01)

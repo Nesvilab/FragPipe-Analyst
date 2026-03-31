@@ -3319,40 +3319,93 @@ output$download_density_svg<-downloadHandler(
   # ===========================================================================
 
   kb_ptm_results <- reactiveVal(NULL)
+  kb_ptm_start_time <- reactiveVal(NULL)
 
-  # Run PTM-SEA button — runs all contrasts at once
+  # ExtendedTask — runs PTM-SEA in a background R process so the UI stays
+  # responsive.  Invoked via $invoke() and result collected via $result().
+  ptmsea_task <- ExtendedTask$new(function(dep_snapshot, species, mod_type,
+                                           nperm, min_size, subsets) {
+    future::future({
+      run_ptmsea_all(dep_snapshot, species = species, mod_type = mod_type,
+                     nperm = nperm, min_size = min_size, subsets = subsets)
+    }, seed = TRUE)
+  })
+
+  # Launch button — snapshot inputs and kick off the background task
   observeEvent(input$kb_ptm_run_sea, {
     req(dep())
-    # Validate site-level data (check both metadata and input$exp due to TMT-site level bug)
     is_site <- metadata(dep())$level == "site" ||
                input$exp %in% c("TMT-site", "DIA-site")
     validate(need(is_site, "PTM-SEA requires site-level data."))
     validate(need("SequenceWindow" %in% colnames(SummarizedExperiment::rowData(dep())),
                   "SequenceWindow column missing from site data."))
 
+    # Snapshot all inputs before launching (background process can't access reactives)
+    dep_snapshot <- dep()
     species  <- input$kb_ptm_species %||% "human"
     mod_type <- input$kb_ptm_mod_type %||% "p"
     nperm    <- input$kb_ptm_nperm %||% 1000L
     min_size <- input$kb_ptm_min_size %||% 5L
     subsets  <- input$kb_ptm_subsets %||% c("PERT", "PATH", "DISEASE", "KINASE")
 
-    t_total <- proc.time()[["elapsed"]]
-    withProgress(message = "Running PTM-SEA (all contrasts) ...", value = 0.1, {
-      result <- tryCatch(
-        run_ptmsea_all(dep(), species = species, mod_type = mod_type,
-                       nperm = nperm, min_size = min_size, subsets = subsets),
-        error = function(e) {
-          showNotification(paste0("PTM-SEA error: ", e$message),
-                           type = "error", duration = 8)
-          NULL
-        }
-      )
-      incProgress(0.9)
-    })
-    message(sprintf("[PTM-SEA] Total: %.1fs", proc.time()[["elapsed"]] - t_total))
+    kb_ptm_start_time(proc.time()[["elapsed"]])
+    shinyjs::disable("kb_ptm_run_sea")
+    ptmsea_task$invoke(dep_snapshot, species, mod_type, nperm, min_size, subsets)
+    showNotification("PTM-SEA started in background. You can continue using the app.",
+                     type = "message", duration = 5)
+  })
 
-    kb_ptm_results(result)
-    DT::selectRows(kb_ptm_table_proxy, NULL)
+  # Status indicator next to the Run button
+  output$kb_ptm_status <- renderUI({
+    status <- ptmsea_task$status()
+    if (status == "running") {
+      tags$span(style = "margin-left:10px; color:#e67e22; font-size:13px;",
+        icon("spinner", class = "fa-spin"),
+        "Running..."
+      )
+    } else if (status == "error") {
+      tags$span(style = "margin-left:10px; color:#e74c3c; font-size:13px;",
+        icon("exclamation-triangle"),
+        "Error"
+      )
+    } else if (!is.null(kb_ptm_results())) {
+      tags$span(style = "margin-left:10px; color:#27ae60; font-size:13px;",
+        icon("check"),
+        "Done"
+      )
+    } else {
+      NULL
+    }
+  })
+
+  # Collect result or handle error when the background task finishes
+  observe({
+    status <- ptmsea_task$status()
+    req(status %in% c("success", "error"))
+
+    t_start <- kb_ptm_start_time()
+    if (!is.null(t_start)) {
+      elapsed <- proc.time()[["elapsed"]] - t_start
+      message(sprintf("[PTM-SEA] Total: %.1fs", elapsed))
+      kb_ptm_start_time(NULL)
+    }
+
+    shinyjs::enable("kb_ptm_run_sea")
+
+    if (status == "success") {
+      result <- tryCatch(ptmsea_task$result(), error = function(e) NULL)
+      kb_ptm_results(result)
+      DT::selectRows(kb_ptm_table_proxy, NULL)
+      showNotification("PTM-SEA completed!", type = "message", duration = 5)
+    } else {
+      # status == "error": result() will re-throw, so catch and display
+      err_msg <- tryCatch({
+        ptmsea_task$result()
+        "Unknown error"
+      }, error = function(e) e$message)
+      showNotification(paste0("PTM-SEA error: ", err_msg),
+                       type = "error", duration = 8)
+    }
   })
 
   # PTM-SEA filtered table data
