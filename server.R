@@ -3118,7 +3118,7 @@ output$download_density_svg<-downloadHandler(
   # ===========================================================================
 
   # Up to 5 highlight colors for multi-set volcano
-  KB_GS_COLORS <- c("#e74c3c", "#3498db", "#2ecc71", "#f39c12", "#9b59b6")
+  KB_GS_COLORS <- c("#e74c3c", "#3498db", "#9b59b6")  # Set A, Set B, Overlap
 
   # --- Database selector UI (multi-select) ---
   output$kb_gs_database_ui <- renderUI({
@@ -3209,9 +3209,7 @@ output$download_density_svg<-downloadHandler(
   # Table data: ORA results with p-value pre-filtering via numeric inputs;
   # Direction/Database/Gene Set filtering handled by DT's built-in column filters
   kb_gs_table_data <- reactive({
-    res      <- kb_gs_ora_results()
-    p_cut    <- input$kb_gs_p_filter
-    use_adjp <- isTRUE(input$kb_gs_use_adjp)
+    res          <- kb_gs_ora_results()
     cur_contrast <- input$kb_contrast
 
     validate(need(!is.null(res) && nrow(res) > 0,
@@ -3221,13 +3219,7 @@ output$download_density_svg<-downloadHandler(
     if (!is.null(cur_contrast) && "contrast" %in% colnames(res))
       res <- dplyr::filter(res, contrast == cur_contrast)
 
-    # Apply p-value cutoff (adjusted or raw depending on checkbox)
-    p_col <- if (use_adjp) "p.adjust_hyper" else "p_hyper"
-    if (!is.null(p_cut) && p_col %in% colnames(res))
-      res <- dplyr::filter(res, .data[[p_col]] <= p_cut)
-
-    validate(need(nrow(res) > 0,
-      "No results pass the current p-value cutoff."))
+    validate(need(nrow(res) > 0, "No ORA results for this contrast."))
 
     # Direction as factor for dropdown filter
     dir_label <- if ("direction" %in% colnames(res)) {
@@ -3245,8 +3237,8 @@ output$download_density_svg<-downloadHandler(
       `Gene Set`          = if ("Term" %in% colnames(res)) res$Term else res$Description,
       Overlap             = if ("IN" %in% colnames(res)) res$IN else res$Count,
       `log2 OR`           = if ("log_odds" %in% colnames(res)) res$log_odds else NA_real_,
-      `p-value`           = if ("p_hyper" %in% colnames(res)) res$p_hyper else NA_real_,
-      `adj. p-value`      = if ("p.adjust_hyper" %in% colnames(res)) res$p.adjust_hyper else NA_real_,
+      `p-value`           = if ("p_hyper" %in% colnames(res)) signif(res$p_hyper, 4) else NA_real_,
+      `adj. p-value`      = if ("p.adjust_hyper" %in% colnames(res)) signif(res$p.adjust_hyper, 4) else NA_real_,
       `Overlapping Genes` = if ("geneID" %in% colnames(res)) res$geneID else NA_character_,
       check.names         = FALSE,
       stringsAsFactors    = FALSE
@@ -3262,16 +3254,21 @@ output$download_density_svg<-downloadHandler(
     num_cols <- intersect(c("log2 OR", "p-value", "adj. p-value"), colnames(df))
     overlap_idx <- which(colnames(df) == "Overlapping Genes") - 1L
 
+    # Pre-fill adj. p-value filter with "0 ... 0.05"
+    adjp_idx <- which(colnames(df) == "adj. p-value")
+    search_cols <- lapply(seq_len(ncol(df)), function(i) {
+      if (i == adjp_idx) list(search = "0 ... 0.05") else list(search = "")
+    })
+
     DT::datatable(
       df,
       selection = list(mode = "multiple", selected = NULL),
       rownames  = FALSE,
-      filter    = "top",
+      filter    = list(position = "top", plain = TRUE),
       options   = list(
         pageLength = 10,
-        scrollX    = TRUE,
-        scrollY    = "280px",
         dom        = "tp",
+        searchCols = search_cols,
         columnDefs = list(
           list(
             targets = overlap_idx,
@@ -3282,12 +3279,18 @@ output$download_density_svg<-downloadHandler(
           )
         )
       )
-    ) %>%
-      DT::formatRound(columns = num_cols, digits = 4)
+    )
   })
 
   # Proxy for clearing row selection programmatically
   kb_gs_table_proxy <- DT::dataTableProxy("kb_gs_table")
+
+  # Limit selection to 2 rows max
+  observeEvent(input$kb_gs_table_rows_selected, {
+    sel <- input$kb_gs_table_rows_selected
+    if (length(sel) > 2L)
+      DT::selectRows(kb_gs_table_proxy, tail(sel, 2L))
+  })
 
   # Color legend strip showing which color maps to which selected gene set
   output$kb_gs_color_legend <- renderUI({
@@ -3295,22 +3298,35 @@ output$download_density_svg<-downloadHandler(
     if (is.null(sel) || length(sel) == 0L) return(NULL)
     tbl <- tryCatch(kb_gs_table_data(), error = function(e) NULL)
     if (is.null(tbl) || !"Gene Set" %in% colnames(tbl)) return(NULL)
-    rows <- head(sel, 5L)
+    rows <- head(sel, 2L)
     set_names <- tbl[["Gene Set"]][rows]
     dir_labels <- if ("Direction" %in% colnames(tbl)) tbl[["Direction"]][rows] else NULL
-    colors    <- KB_GS_COLORS[seq_along(rows)]
-    items <- mapply(function(nm, col, idx) {
-      dir_tag <- if (!is.null(dir_labels)) paste0(" (", dir_labels[idx], ")") else ""
-      short <- if (nchar(nm) > 45) paste0(substr(nm, 1, 42), "...") else nm
-      label <- paste0(short, dir_tag)
-      tags$span(style = paste0("margin-right:12px; white-space:nowrap;"),
+
+    make_swatch <- function(col, label) {
+      tags$span(style = "margin-right:12px; white-space:nowrap;",
         tags$span(style = paste0(
           "display:inline-block; width:12px; height:12px; ",
           "border-radius:2px; margin-right:4px; vertical-align:middle; ",
           "background-color:", col, ";")),
         tags$span(style = "font-size:12px; vertical-align:middle;", label)
       )
-    }, set_names, colors, seq_along(rows), SIMPLIFY = FALSE)
+    }
+    shorten <- function(nm) if (nchar(nm) > 40) paste0(substr(nm, 1, 37), "...") else nm
+    add_dir <- function(nm, idx) {
+      dir_tag <- if (!is.null(dir_labels)) paste0(" (", dir_labels[idx], ")") else ""
+      paste0(shorten(nm), dir_tag)
+    }
+
+    if (length(rows) == 1L) {
+      items <- list(make_swatch(KB_GS_COLORS[1], add_dir(set_names[1], 1)))
+    } else {
+      # Two sets: show A-only, B-only, overlap
+      items <- list(
+        make_swatch(KB_GS_COLORS[1], paste0(add_dir(set_names[1], 1), " only")),
+        make_swatch(KB_GS_COLORS[2], paste0(add_dir(set_names[2], 2), " only")),
+        make_swatch(KB_GS_COLORS[3], "Overlap")
+      )
+    }
     tags$div(style = "padding: 4px 0 6px 0; line-height: 1.8;", items)
   })
 
@@ -3408,11 +3424,9 @@ output$download_density_svg<-downloadHandler(
     }
   })
 
-  # PTM-SEA filtered table data
+  # PTM-SEA table data
   kb_ptm_table_data <- reactive({
     res          <- kb_ptm_results()
-    p_cut        <- input$kb_ptm_p_filter
-    use_adjp     <- isTRUE(input$kb_ptm_use_adjp)
     cur_contrast <- input$kb_contrast
 
     validate(need(!is.null(res) && nrow(res) > 0,
@@ -3422,19 +3436,15 @@ output$download_density_svg<-downloadHandler(
     if (!is.null(cur_contrast) && "contrast" %in% colnames(res))
       res <- dplyr::filter(res, contrast == cur_contrast)
 
-    p_col <- if (use_adjp) "adj_p_value" else "p_value"
-    if (!is.null(p_cut) && p_col %in% colnames(res))
-      res <- dplyr::filter(res, .data[[p_col]] <= p_cut)
-
-    validate(need(nrow(res) > 0, "No results pass the current p-value cutoff."))
+    validate(need(nrow(res) > 0, "No PTM-SEA results for this contrast."))
 
     data.frame(
       `Set Name`     = res$set,
       `Set Size`     = res$set_size,
       ES             = round(res$ES, 4),
       NES            = round(res$NES, 4),
-      `p-value`      = res$p_value,
-      `adj. p-value` = res$adj_p_value,
+      `p-value`      = signif(res$p_value, 4),
+      `adj. p-value` = signif(res$adj_p_value, 4),
       check.names    = FALSE,
       stringsAsFactors = FALSE
     )
@@ -3446,14 +3456,24 @@ output$download_density_svg<-downloadHandler(
       validate(need(FALSE, conditionMessage(e)))
     })
     num_cols <- intersect(c("ES", "NES", "p-value", "adj. p-value"), colnames(df))
+
+    # Pre-fill adj. p-value filter with "0 ... 0.05"
+    adjp_idx <- which(colnames(df) == "adj. p-value")
+    search_cols <- lapply(seq_len(ncol(df)), function(i) {
+      if (i == adjp_idx) list(search = "0 ... 0.05") else list(search = "")
+    })
+
     DT::datatable(
       df,
       selection = list(mode = "single", selected = NULL),
       rownames  = FALSE,
-      filter    = "top",
-      options   = list(pageLength = 10, scrollX = TRUE, scrollY = "280px", dom = "tp")
-    ) %>%
-      DT::formatSignif(columns = num_cols, digits = 4)
+      filter    = list(position = "top", plain = TRUE),
+      options   = list(
+        pageLength = 10,
+        dom        = "tp",
+        searchCols = search_cols
+      )
+    )
   })
 
   kb_ptm_table_proxy <- DT::dataTableProxy("kb_ptm_table")
@@ -3572,8 +3592,8 @@ output$download_density_svg<-downloadHandler(
       }
 
     } else if (!is.null(selected_rows) && length(selected_rows) > 0L) {
-      # --- Gene-level ORA volcano overlay ---
-      rows      <- head(selected_rows, 5L)   # cap at 5 sets
+      # --- Gene-level ORA volcano overlay (max 2 sets) ---
+      rows      <- head(selected_rows, 2L)
       tbl       <- tryCatch(kb_gs_table_data(), error = function(e) NULL)
       col_cache <- kb_gs_collection_cache()
       show_all  <- isTRUE(input$kb_gs_show_all_genes)
@@ -3582,7 +3602,6 @@ output$download_density_svg<-downloadHandler(
         set_names_sel <- tbl[["Gene Set"]][rows]
         overlap_genes <- if ("Overlapping Genes" %in% colnames(tbl))
           tbl[["Overlapping Genes"]][rows] else rep(NA_character_, length(rows))
-        # For legend labels: include direction if present
         dir_labels <- if ("Direction" %in% colnames(tbl))
           tbl[["Direction"]][rows] else rep("", length(rows))
         legend_labels <- ifelse(dir_labels != "",
@@ -3590,8 +3609,6 @@ output$download_density_svg<-downloadHandler(
           set_names_sel)
 
         # Build a reverse lookup (only when "show all genes" is checked)
-        # Maps lowercase-cleaned name -> gene vector so that e.g.
-        # "Metabolic pathways" matches "KEGG_METABOLIC_PATHWAYS"
         .clean_name <- function(x) tolower(gsub("_", " ", gsub(
           "^HALLMARK_|^KEGG_|^REACTOME_|^WP_|^GOBP_|^GOMF_|^GOCC_", "", x)))
         rev_lookup <- list()
@@ -3604,27 +3621,77 @@ output$download_density_svg<-downloadHandler(
           }
         }
 
-        gene_set_list <- setNames(
-          lapply(seq_along(set_names_sel), function(i) {
-            nm <- set_names_sel[i]
-            genes <- NULL
-            if (show_all) {
-              key <- tolower(nm)
-              genes <- rev_lookup[[key]]
-              if (is.null(genes)) genes <- rev_lookup[[.clean_name(nm)]]
-            }
-            if (is.null(genes) || length(genes) == 0L) {
-              # Fall back to overlapping genes from ORA results
-              gid <- overlap_genes[i]
-              if (!is.na(gid) && nchar(gid) > 0L)
-                genes <- strsplit(gid, "/")[[1]]
-            }
-            if (is.null(genes)) return(character(0L))
-            genes
-          }),
-          legend_labels
-        )
-        # Drop empty sets
+        # Resolve gene symbols for each selected set
+        raw_gene_symbols <- lapply(seq_along(set_names_sel), function(i) {
+          nm <- set_names_sel[i]
+          genes <- NULL
+          if (show_all) {
+            key <- tolower(nm)
+            genes <- rev_lookup[[key]]
+            if (is.null(genes)) genes <- rev_lookup[[.clean_name(nm)]]
+          }
+          if (is.null(genes) || length(genes) == 0L) {
+            gid <- overlap_genes[i]
+            if (!is.na(gid) && nchar(gid) > 0L)
+              genes <- strsplit(gid, "/")[[1]]
+          }
+          if (is.null(genes)) character(0L) else genes
+        })
+
+        # For site/peptide-level data, ORA returns gene symbols but the volcano
+        # plot uses site-level names (e.g. "AKT1_S473" or Index). Map gene
+        # symbols to the actual volcano labels via the Gene column in rowData.
+        rd       <- as.data.frame(SummarizedExperiment::rowData(dep()))
+        exp_type <- metadata(dep())$exp
+        lvl_type <- metadata(dep())$level
+        is_site_or_peptide <- lvl_type %in% c("site", "peptide")
+        show_gene <- isTRUE(input$kb_show_gene)
+
+        .gene_to_volcano_names <- function(gene_syms) {
+          if (!is_site_or_peptide || length(gene_syms) == 0L) return(gene_syms)
+          # Find rows whose Gene matches the ORA gene symbols
+          matched <- which(rd$Gene %in% gene_syms)
+          if (length(matched) == 0L) return(gene_syms)
+          # Build the same volcano name as plot_volcano_customized
+          if (!show_gene) {
+            unique(rd$Index[matched])
+          } else if (exp_type == "TMT" && lvl_type == "site") {
+            unique(paste0(rd$Gene[matched], "_", gsub(".*_", "", rd$ID[matched])))
+          } else if (exp_type == "TMT") {
+            unique(paste0(rd$Gene[matched], "_", rd$Peptide[matched]))
+          } else if (exp_type == "DIA" && lvl_type == "site") {
+            unique(paste0(rd$Gene[matched], "_", gsub(".*_", "", rd$ID[matched])))
+          } else if (exp_type == "DIA") {
+            if ("Gene" %in% colnames(rd))
+              unique(paste0(rd$Gene[matched], "_", rd$Peptide[matched]))
+            else
+              unique(paste0(rd$Genes[matched], "_", rd$Stripped.Sequence[matched]))
+          } else {
+            gene_syms
+          }
+        }
+
+        raw_genes <- lapply(raw_gene_symbols, .gene_to_volcano_names)
+
+        if (length(rows) == 1L) {
+          # Single set: simple coloring
+          gene_set_list <- setNames(raw_genes, legend_labels)
+        } else {
+          # Two sets: split into A-only, B-only, overlap
+          genes_a <- raw_genes[[1]]
+          genes_b <- raw_genes[[2]]
+          shared  <- intersect(genes_a, genes_b)
+          only_a  <- setdiff(genes_a, shared)
+          only_b  <- setdiff(genes_b, shared)
+          shorten <- function(nm) if (nchar(nm) > 35) paste0(substr(nm, 1, 32), "...") else nm
+          gene_set_list <- list()
+          if (length(only_a) > 0L)
+            gene_set_list[[paste0(shorten(legend_labels[1]), " only")]] <- only_a
+          if (length(only_b) > 0L)
+            gene_set_list[[paste0(shorten(legend_labels[2]), " only")]] <- only_b
+          if (length(shared) > 0L)
+            gene_set_list[["Overlap"]] <- shared
+        }
         gene_set_list <- Filter(function(x) length(x) > 0L, gene_set_list)
         if (length(gene_set_list) == 0L) gene_set_list <- NULL
       }

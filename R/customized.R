@@ -2621,8 +2621,8 @@ plot_volcano_customized <- function(dep, contrast, label_size = 3, name_col = NU
 
   # Build dot colour category -----------------------------------------------
   # Priority (highest to lowest):
-  #   gene_set_list  -> named list (color -> gene symbols); up to 5 sets,
-  #                     each set gets its own colour; first set wins overlaps
+  #   gene_set_list  -> named list (color -> gene symbols); up to 3 entries
+  #                     (A-only, B-only, overlap); first set wins ties
   #   selected       -> legacy single-set highlight (red "#e74c3c")
   #   default        -> "significant" = black, "not_significant" = grey
 

@@ -842,13 +842,13 @@ ui <- function(request){shinyUI(
                     column(3,
                       shinyWidgets::dropdownButton(
                         circle = TRUE, status = "default", right = TRUE,
-                        icon   = icon("sliders"), width = "260px",
+                        icon   = icon("gear"), width = "260px",
                         numericInput("kb_lfc",   "LFC cutoff",
                                      min = 0, max = 10, value = 1, step = 0.5),
                         numericInput("kb_alpha", "p-value cutoff",
                                      min = 0, max = 1,  value = 0.05, step = 0.01),
                         tooltip = tooltipOptions(placement = "left",
-                                                 title = "Threshold settings")
+                                                 title = "DE cutoff settings")
                       )
                     )
                   ),
@@ -887,43 +887,36 @@ ui <- function(request){shinyUI(
                                         "Apply adjusted p-values to select DE results",
                                         value = TRUE),
                           tooltip = tooltipOptions(placement = "left",
-                                                   title = "customize settings")
+                                                   title = "DE cutoff settings")
                         ))
                       ),
                       fluidRow(
                         column(3, actionButton("kb_gs_run_ora", "Run ORA",
-                                               icon = icon("play"))),
-                        column(3,
-                          numericInput("kb_gs_p_filter", "p-value cutoff",
-                                       min = 0, max = 1, value = 0.05, step = 0.01)
-                        ),
-                        column(3,
-                          tags$div(style = "margin-top: 26px;",
-                            checkboxInput("kb_gs_use_adjp", "Use adjusted p-value",
-                                          value = TRUE)
-                          )
-                        ),
-                        column(3,
-                          tags$div(style = "margin-top: 26px;",
-                            checkboxInput("kb_gs_show_all_genes",
-                                          "Label all genes in gene set",
-                                          value = FALSE)
-                          )
-                        )
+                                               icon = icon("play")))
                       ),
                       uiOutput("kb_gs_color_legend"),
-                      DT::dataTableOutput("kb_gs_table")
+                      checkboxInput("kb_gs_show_all_genes",
+                                    "Label all genes in gene set",
+                                    value = FALSE),
+                      tags$div(style = "overflow-x: auto;",
+                        DT::dataTableOutput("kb_gs_table")
+                      )
                     ),
                     # ---- PTM-SEA tab ----
                     tabPanel("PTM-SEA",
                       conditionalPanel(
                         condition = "input.exp == 'TMT-site' || input.exp == 'DIA-site'",
                         fluidRow(
-                          column(3,
-                            tags$p(style = "margin-top:8px;",
-                              tags$strong("Database:"), " PTMsigDB v2.0")
+                          column(4,
+                            selectInput("kb_ptm_subsets", "Signatures (PTMsigDB v2.0):",
+                                        choices = c("Perturbation" = "PERT",
+                                                    "Pathway"      = "PATH",
+                                                    "Disease"      = "DISEASE",
+                                                    "Kinase"       = "KINASE"),
+                                        selected = c("PERT", "PATH", "DISEASE", "KINASE"),
+                                        multiple = TRUE)
                           ),
-                          column(3,
+                          column(2,
                             selectInput("kb_ptm_species", "Species:",
                                         choices = c("Human" = "human",
                                                     "Mouse" = "mouse",
@@ -942,12 +935,6 @@ ui <- function(request){shinyUI(
                           column(3, shinyWidgets::dropdownButton(
                             circle = TRUE, status = "default", right = TRUE,
                             icon = icon("gear"), width = "300px",
-                            checkboxGroupInput("kb_ptm_subsets", "Signature subsets:",
-                                               choices = c("Perturbation" = "PERT",
-                                                           "Pathway"      = "PATH",
-                                                           "Disease"      = "DISEASE",
-                                                           "Kinase"       = "KINASE"),
-                                               selected = c("PERT", "PATH", "DISEASE", "KINASE")),
                             numericInput("kb_ptm_nperm", "Permutations",
                                          min = 1000, max = 100000, value = 1000, step = 1000),
                             numericInput("kb_ptm_min_size", "Min set size",
@@ -961,20 +948,12 @@ ui <- function(request){shinyUI(
                             actionButton("kb_ptm_run_sea", "Run PTM-SEA",
                                          icon = icon("play")),
                             uiOutput("kb_ptm_status", inline = TRUE)
-                          ),
-                          column(3,
-                            numericInput("kb_ptm_p_filter", "p-value cutoff",
-                                         min = 0, max = 1, value = 0.05, step = 0.01)
-                          ),
-                          column(3,
-                            tags$div(style = "margin-top: 26px;",
-                              checkboxInput("kb_ptm_use_adjp", "Use adjusted p-value",
-                                            value = TRUE)
-                            )
                           )
                         ),
                         uiOutput("kb_ptm_color_legend"),
-                        DT::dataTableOutput("kb_ptm_table")
+                        tags$div(style = "overflow-x: auto;",
+                          DT::dataTableOutput("kb_ptm_table")
+                        )
                       ),
                       conditionalPanel(
                         condition = "input.exp != 'TMT-site' && input.exp != 'DIA-site'",
