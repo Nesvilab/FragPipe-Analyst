@@ -1827,99 +1827,74 @@ plot_kinase_substrate_network <- function(ptmsea_results, dep, contrast,
     ))
   }
 
+  # Deduplicate PSP vs iKiP kinase sets: when the same kinase appears in both
+  # sources, keep the PSP (literature-curated) set; use iKiP only when PSP
+  # is absent.  Extract canonical gene symbol from the set name to group them.
+  kinase_res$source <- ifelse(grepl("^KINASE-PSP_", kinase_res$set), "PSP", "iKiP")
+  kinase_res$canon <- toupper(gsub("^KINASE-(PSP|iKiP)_", "", kinase_res$set))
+  # Normalize PSP aliases: "Akt1/AKT1" → "AKT1" (take the part after "/")
+  kinase_res$canon <- ifelse(
+    grepl("/", kinase_res$canon),
+    toupper(sub(".*/", "", kinase_res$canon)),
+    kinase_res$canon
+  )
+  # Remove isoform suffixes like "_ISO2"
+  kinase_res$canon <- gsub("_ISO\\d+$", "", kinase_res$canon)
+  # Also normalize iKiP complex names: "CDK1-CCNB1" → "CDK1"
+  kinase_res$canon <- gsub("-.*$", "", kinase_res$canon)
+  # Dot separator in iKiP (e.g., "MAPK1.ERK2") → take first part
+  kinase_res$canon <- gsub("\\..*$", "", kinase_res$canon)
+
+  n_before_dedup <- nrow(kinase_res)
+  # For each canonical kinase, keep PSP if available, otherwise iKiP
+  kinase_res <- kinase_res[order(kinase_res$canon,
+                                  ifelse(kinase_res$source == "PSP", 0, 1)), ]
+  kinase_res <- kinase_res[!duplicated(kinase_res$canon), ]
+  message(sprintf("[KS-Net] After PSP/iKiP dedup: %d → %d kinases",
+                  n_before_dedup, nrow(kinase_res)))
+
   # Sort by |NES|
   kinase_res <- kinase_res[order(-abs(kinase_res$NES)), ]
 
   # --- 2. Load PTMsigDB and prepare DE data ---
   gmt_path <- get_ptmsigdb_path(species)
 
-  # Parse the GMT manually to extract both flanking members AND gene_site
-  # annotations from the description field (e.g., "n=32|AKT1_S473|MAPK3_T202")
-  gmt_lines <- readLines(gmt_path, warn = FALSE)
-  gmt_lines <- gmt_lines[nchar(trimws(gmt_lines)) > 0]
-
-  gmt_list       <- list()  # set_name → flanking sequence members
-  gmt_desc       <- list()  # set_name → gene_site pairs from description
-  gmt_flank2site <- list()  # set_name → mapping of flanking → gene_site
-
-  for (line in gmt_lines) {
-    parts <- strsplit(line, "\t")[[1]]
-    if (length(parts) < 3) next
-    set_name <- parts[1]
-    desc_field <- parts[2]
-    members <- parts[seq(3, length(parts))]
-    members <- members[nchar(trimws(members)) > 0]
-    gmt_list[[set_name]] <- members
-
-    # Parse description: "n=32|GENE1_SITE1|GENE2_SITE2|..."
-    desc_parts <- strsplit(desc_field, "\\|")[[1]]
-    gene_sites <- desc_parts[grepl("^[A-Za-z0-9]+_[A-Z][0-9]+$", desc_parts)]
-    gmt_desc[[set_name]] <- toupper(gene_sites)
-
-    # Build flanking → gene_site map (order matches between desc and members)
-    # Description has gene_site entries in same order as flanking members
-    if (length(gene_sites) == length(members)) {
-      gmt_flank2site[[set_name]] <- setNames(toupper(gene_sites), members)
-    }
-  }
+  # Parse the GMT to extract flanking sequence members per set
+  gmt_list <- read_gmt(gmt_path)
 
   rd <- as.data.frame(SummarizedExperiment::rowData(dep))
   diff_col <- paste0(contrast, "_diff")
   padj_col <- paste0(contrast, if (site_use_adjp) "_p.adj" else "_p.val")
 
-  # Build flanking key for matching
+  # Build flanking key for matching (same format as PTM-SEA input)
   mod_suffix <- paste0("-", mod_type)
   rd$flank_key <- paste0(toupper(rd$SequenceWindow), mod_suffix)
 
-  # Extract gene name
-  if ("Gene" %in% colnames(rd)) {
-    rd$gene_symbol <- rd$Gene
-  } else {
-    rd$gene_symbol <- gsub("[.].*", "", rd$name)
-  }
+  # Build site label for display (e.g., "AKT1_S473")
+  gene_sym <- if ("Gene" %in% colnames(rd)) rd$Gene else gsub("[.].*", "", rd$name)
+  site_pos <- regmatches(rd$Index, regexpr("[STY][0-9]+", rd$Index))
+  rd$site_label <- ifelse(nchar(site_pos) > 0 & !is.na(gene_sym),
+                          paste0(gene_sym, "_", site_pos),
+                          rd$Index)
 
-  # Build gene_site key from user data (e.g., "AKT1_S473")
-  # Try to extract amino acid + position from the row name/Index
-  rd$gene_site <- NA_character_
-  if ("Index" %in% colnames(rd)) {
-    # Index is often like "A0A1W2PQY6_S123" or "AKT1_S473" or "S473"
-    # Try to match site pattern (single letter + digits) from Index
-    site_match <- regmatches(rd$Index, regexpr("[STY][0-9]+", rd$Index))
-    has_site <- nchar(site_match) > 0 & !is.na(rd$gene_symbol)
-    rd$gene_site[has_site] <- toupper(paste0(rd$gene_symbol[has_site], "_",
-                                              site_match[has_site]))
-  }
-  # Fallback: try extracting from 'name' column
-  if (all(is.na(rd$gene_site)) && "name" %in% colnames(rd)) {
-    site_match <- regmatches(rd$name, regexpr("[STY][0-9]+", rd$name))
-    has_site <- nchar(site_match) > 0 & !is.na(rd$gene_symbol)
-    rd$gene_site[has_site] <- toupper(paste0(rd$gene_symbol[has_site], "_",
-                                              site_match[has_site]))
-  }
+  # Build lookup: flank_key → row index (for fast matching)
+  flank_lookup <- setNames(seq_len(nrow(rd)), rd$flank_key)
+  # Keep first occurrence for duplicates
+  flank_lookup <- flank_lookup[!duplicated(names(flank_lookup))]
 
-  # Site label for display
-  rd$site_label <- ifelse(!is.na(rd$gene_site), rd$gene_site,
-                          paste0(rd$gene_symbol, "_site"))
-
-  # Build lookup: gene_site → row index in rd (for gene_site matching)
-  # Use match() approach to handle duplicates (keeps first occurrence)
-  gs_valid <- !is.na(rd$gene_site)
-  gene_site_lookup <- setNames(which(gs_valid), rd$gene_site[gs_valid])
-  gene_site_lookup <- gene_site_lookup[!duplicated(names(gene_site_lookup))]
-
-  # Log matching info
-  n_with_gs <- sum(!is.na(rd$gene_site))
-  message("[KS-Net] DE sites with gene_site key: ", n_with_gs, " / ", nrow(rd))
-  message("[KS-Net] Sample DE gene_sites: ",
-          paste(head(rd$gene_site[!is.na(rd$gene_site)], 5), collapse = " | "))
+  message(sprintf("[KS-Net] DE sites with flanking key: %d / %d",
+                  sum(!is.na(rd$SequenceWindow) & nchar(trimws(rd$SequenceWindow)) > 0),
+                  nrow(rd)))
 
   # --- 3. Build kinase and substrate nodes + edges ---
   max_nes <- max(abs(kinase_res$NES), na.rm = TRUE)
 
+  kinase_label <- gsub("^KINASE-(PSP|iKiP)_", "", kinase_res$set)
   kinase_nodes <- data.frame(
     id    = kinase_res$set,
-    label = gsub("^KINASE-PSP_", "", kinase_res$set),
-    title = paste0("<b>", gsub("^KINASE-PSP_", "", kinase_res$set), "</b>",
+    label = kinase_label,
+    title = paste0("<b>", kinase_label, "</b>",
+                   "<br>Set: ", kinase_res$set,
                    "<br>NES: ", round(kinase_res$NES, 3),
                    "<br>adj.p: ", signif(kinase_res$adj_p_value, 3),
                    "<br>Set size: ", kinase_res$set_size),
@@ -1956,46 +1931,22 @@ plot_kinase_substrate_network <- function(ptmsea_results, dep, contrast,
       next
     }
 
-    # Parse direction
-    is_up   <- grepl(";u$", members)
-    is_down <- grepl(";d$", members)
-    direction <- ifelse(is_up, "up", ifelse(is_down, "down", "unknown"))
-
-    # Get the gene_site descriptions for this set
-    desc_sites <- gmt_desc[[set_name]]   # e.g., c("AKT1_S473", "MAPK3_T202")
-    flank_map  <- gmt_flank2site[[set_name]]  # flanking → gene_site
-
     n_matched <- 0L; n_na <- 0L; n_lfc_fail <- 0L; n_p_fail <- 0L; n_pass <- 0L
-
-    # Debug: log first few member keys vs DE keys for this kinase
-    if (length(members) > 0) {
-      sample_gmt <- head(gsub(";[ud]$", "", members), 3)
-      sample_de  <- head(rd$flank_key[!is.na(rd$flank_key)], 3)
-      message(sprintf("[KS-Net]   %s GMT sample: [%s] (nchar=%s)",
-                      set_name,
-                      paste(sample_gmt, collapse=", "),
-                      paste(nchar(sample_gmt), collapse=",")))
-      message(sprintf("[KS-Net]   %s DE  sample: [%s] (nchar=%s)",
-                      set_name,
-                      paste(sample_de, collapse=", "),
-                      paste(nchar(sample_de), collapse=",")))
-    }
 
     for (j in seq_along(members)) {
       member <- members[j]
-      dir_j  <- direction[j]
 
-      # Try matching by flanking sequence first
+      # Match by flanking sequence: strip ";u"/";d" suffix, uppercase the
+      # flanking portion only (keep mod-type suffix like "-p" lowercase)
       flank_key <- gsub(";[ud]$", "", member)
-      rd_idx <- match(toupper(flank_key), rd$flank_key)
-
-      # If flanking didn't match, try gene_site matching
-      if (is.na(rd_idx) && !is.null(flank_map)) {
-        gs <- flank_map[member]
-        if (!is.na(gs) && gs %in% rd$gene_site) {
-          rd_idx <- gene_site_lookup[gs]
-        }
+      dash_pos <- regexpr("-", flank_key)
+      if (dash_pos > 0) {
+        flank_upper <- paste0(toupper(substr(flank_key, 1, dash_pos - 1)),
+                              substr(flank_key, dash_pos, nchar(flank_key)))
+      } else {
+        flank_upper <- toupper(flank_key)
       }
+      rd_idx <- flank_lookup[flank_upper]
 
       if (is.na(rd_idx)) next
       n_matched <- n_matched + 1L

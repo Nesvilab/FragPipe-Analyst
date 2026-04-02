@@ -3438,7 +3438,17 @@ output$download_density_svg<-downloadHandler(
 
     validate(need(nrow(res) > 0, "No PTM-SEA results for this contrast."))
 
+    # Extract signature category from set name prefix (e.g. "KINASE-..." → "Kinase")
+    category <- dplyr::case_when(
+      grepl("^KINASE-",  res$set) ~ "Kinase",
+      grepl("^PATH-",    res$set) ~ "Pathway",
+      grepl("^PERT-",    res$set) ~ "Perturbation",
+      grepl("^DISEASE-", res$set) ~ "Disease",
+      TRUE                        ~ "Other"
+    )
+
     data.frame(
+      Category       = factor(category),
       `Set Name`     = res$set,
       `Set Size`     = res$set_size,
       ES             = round(res$ES, 4),
