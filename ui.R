@@ -965,6 +965,40 @@ ui <- function(request){shinyUI(
                             "Select TMT (site) or DIA (site) as the data type.")
                         )
                       )
+                    ),
+                    # ---- Kinase Activity tab ----
+                    tabPanel("Kinase Activity",
+                      conditionalPanel(
+                        condition = "input.exp == 'TMT-site' || input.exp == 'DIA-site'",
+                        fluidRow(
+                          column(4,
+                            tags$p(style = "margin-top:8px;",
+                              tags$strong("Database:"),
+                              " Curated KS library (414 kinases)")
+                          ),
+                          column(3,
+                            numericInput("kb_ka_min_targets", "Min substrates",
+                                         min = 1, max = 50, value = 3)
+                          ),
+                          column(3,
+                            actionButton("kb_ka_run", "Run Kinase Activity",
+                                         icon = icon("play"))
+                          )
+                        ),
+                        tags$div(style = "overflow-x: auto;",
+                          DT::dataTableOutput("kb_ka_table")
+                        )
+                      ),
+                      conditionalPanel(
+                        condition = "input.exp != 'TMT-site' && input.exp != 'DIA-site'",
+                        tags$div(style = "text-align:center; padding:40px 20px; color:#888;",
+                          icon("info-circle", style = "font-size:24px;"),
+                          tags$p(style = "margin-top:10px;",
+                            "Kinase Activity inference requires site-level data.",
+                            tags$br(),
+                            "Select TMT (site) or DIA (site) as the data type.")
+                        )
+                      )
                     )
                   )
                 )
@@ -1098,7 +1132,7 @@ ui <- function(request){shinyUI(
                                          icon("sliders"), " Kinase settings"),
                             fluidRow(
                               column(3, numericInput("kb_ks_nes_cutoff", "|NES| cutoff",
-                                                     min = 0, max = 10, value = 1.5, step = 0.1)),
+                                                     min = 0, max = 10, value = 5, step = 0.5)),
                               column(3, numericInput("kb_ks_p_cutoff", "Kinase p cutoff",
                                                      min = 0, max = 1, value = 0.05, step = 0.01)),
                               column(3, checkboxInput("kb_ks_use_adjp", "Kinase: adj. p", value = TRUE)),
@@ -1110,7 +1144,7 @@ ui <- function(request){shinyUI(
                                          icon("sliders"), " Substrate settings"),
                             fluidRow(
                               column(3, numericInput("kb_ks_site_lfc", "Site |LFC| cutoff",
-                                                     min = 0, max = 10, value = 0.5, step = 0.5)),
+                                                     min = 0, max = 10, value = 1, step = 0.5)),
                               column(3, numericInput("kb_ks_site_p", "Site p cutoff",
                                                      min = 0, max = 1, value = 0.05, step = 0.05)),
                               column(3, checkboxInput("kb_ks_site_use_adjp", "Substrate: adj. p", value = TRUE))

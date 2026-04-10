@@ -3512,6 +3512,103 @@ output$download_density_svg<-downloadHandler(
   })
 
   # ===========================================================================
+  # Kinase Activity Inference (decoupleR z-score)
+  # ===========================================================================
+
+  kb_ka_results <- reactiveVal(NULL)
+
+  # Load curated KS library once
+  kb_ka_library <- local({
+    path <- file.path("data", "gene_sets", "curated_library.csv")
+    if (file.exists(path)) {
+      df <- read.csv(path, stringsAsFactors = FALSE)
+      # Filter out rows without flanking sequence
+      df <- df[!is.na(df$sequence) & nchar(trimws(df$sequence)) > 2, ]
+      df
+    } else {
+      NULL
+    }
+  })
+
+  observeEvent(input$kb_ka_run, {
+    req(dep())
+    is_site <- metadata(dep())$level == "site" ||
+               input$exp %in% c("TMT-site", "DIA-site")
+    validate(need(is_site, "Kinase Activity requires site-level data."))
+    validate(need("SequenceWindow" %in% colnames(SummarizedExperiment::rowData(dep())),
+                  "SequenceWindow column missing from site data."))
+    validate(need(!is.null(kb_ka_library),
+                  "Curated KS library not found (data/gene_sets/curated_library.csv)."))
+
+    min_targets <- input$kb_ka_min_targets %||% 3L
+
+    withProgress(message = "Running Kinase Activity inference ...", value = 0.3, {
+      result <- tryCatch(
+        run_kinase_activity(dep(), ks_library = kb_ka_library,
+                            min_targets = min_targets),
+        error = function(e) {
+          showNotification(paste0("Kinase Activity error: ", e$message),
+                           type = "error", duration = 8)
+          NULL
+        }
+      )
+      incProgress(0.7)
+    })
+
+    kb_ka_results(result)
+  })
+
+  # Kinase Activity table data
+  kb_ka_table_data <- reactive({
+    res <- kb_ka_results()
+    cur_contrast <- input$kb_contrast
+
+    validate(need(!is.null(res) && nrow(res) > 0,
+      "No Kinase Activity results yet \u2014 click 'Run Kinase Activity'."))
+
+    if (!is.null(cur_contrast) && "contrast" %in% colnames(res))
+      res <- dplyr::filter(res, contrast == cur_contrast)
+
+    validate(need(nrow(res) > 0, "No results for this contrast."))
+
+    data.frame(
+      Kinase           = res$kinase,
+      `Substrates`     = res$n_substrates,
+      `Z-score`        = round(res$score, 4),
+      `p-value`        = signif(res$p_value, 4),
+      `adj. p-value`   = signif(res$adj_p_value, 4),
+      check.names      = FALSE,
+      stringsAsFactors  = FALSE
+    )
+  })
+
+  # Kinase Activity DT table (single-select)
+  output$kb_ka_table <- DT::renderDataTable({
+    df <- tryCatch(kb_ka_table_data(), error = function(e) {
+      validate(need(FALSE, conditionMessage(e)))
+    })
+
+    adjp_idx <- which(colnames(df) == "adj. p-value")
+    search_cols <- lapply(seq_len(ncol(df)), function(i) {
+      if (i == adjp_idx) list(search = "0 ... 0.05") else list(search = "")
+    })
+
+    DT::datatable(
+      df,
+      selection = list(mode = "single", selected = NULL),
+      rownames  = FALSE,
+      filter    = list(position = "top", plain = TRUE),
+      options   = list(
+        pageLength = 10,
+        dom        = "tp",
+        searchCols = search_cols
+      )
+    )
+  })
+
+  kb_ka_table_proxy <- DT::dataTableProxy("kb_ka_table")
+
+  # ===========================================================================
   # VOLCANO (multi-set gene highlighting from table row selection)
   # ===========================================================================
 

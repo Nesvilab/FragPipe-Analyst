@@ -457,6 +457,145 @@ run_ora_kb_all <- function(dep, alpha = 0.05, backend = "clusterProfiler",
 
 
 # --------------------------------------------------------------------------- #
+#  Kinase Activity Inference via decoupleR Z-score
+# --------------------------------------------------------------------------- #
+
+#' Run kinase activity inference using decoupleR Z-score method
+#'
+#' Matches DE site data to a curated kinase-substrate library via flanking
+#' sequences, then runs decoupleR::run_zscore() to infer kinase activity
+#' for all contrasts at once.
+#'
+#' @param dep         SummarizedExperiment after test_diff() (site-level)
+#' @param ks_library  data.frame with columns: source, target, sequence, mor
+#' @param min_targets Minimum number of matched substrates per kinase
+#' @return data.frame with columns: kinase, n_substrates, score, p_value,
+#'         adj_p_value, contrast
+run_kinase_activity <- function(dep, ks_library, min_targets = 3L) {
+  rd <- as.data.frame(SummarizedExperiment::rowData(dep))
+
+  if (!"SequenceWindow" %in% colnames(rd))
+    stop("SequenceWindow column missing — kinase activity requires site-level data.")
+
+  # Discover all contrasts
+  all_contrasts <- gsub("_significant$", "",
+                        grep("_significant$", colnames(rd), value = TRUE))
+  if (length(all_contrasts) == 0)
+    stop("No contrast columns found in data.")
+
+  # Build flanking key for user data
+  sw_upper <- toupper(trimws(rd$SequenceWindow))
+
+  # Build the log2FC matrix (sites × contrasts), keyed by flanking sequence
+  # Deduplicate: keep the site with largest |FC| for the first contrast
+  stat_list <- list()
+  for (contrast in all_contrasts) {
+    diff_col <- paste0(contrast, "_diff")
+    if (!diff_col %in% colnames(rd)) next
+    stat_list[[contrast]] <- rd[[diff_col]]
+  }
+  mat <- do.call(cbind, stat_list)
+  rownames(mat) <- sw_upper
+
+  # Deduplicate rows with the same flanking sequence (keep largest mean |FC|)
+  if (anyDuplicated(rownames(mat))) {
+    row_mean_abs <- rowMeans(abs(mat), na.rm = TRUE)
+    ord <- order(-row_mean_abs)
+    mat <- mat[ord, , drop = FALSE]
+    keep <- !duplicated(rownames(mat))
+    mat <- mat[keep, , drop = FALSE]
+  }
+
+  # Remove rows with NA flanking or all-NA values
+  valid <- !is.na(rownames(mat)) & nchar(rownames(mat)) > 0 &
+           rowSums(!is.na(mat)) > 0
+  mat <- mat[valid, , drop = FALSE]
+
+  # Replace remaining NAs with 0 (no change)
+  mat[is.na(mat)] <- 0
+
+  # Build network: match library flanking sequences to user data
+  lib_seq_upper <- toupper(trimws(ks_library$sequence))
+  matched <- lib_seq_upper %in% rownames(mat) & !is.na(lib_seq_upper)
+
+  if (sum(matched) == 0)
+    stop("No kinase-substrate library entries match the input data.")
+
+  network <- data.frame(
+    source = ks_library$source[matched],
+    target = lib_seq_upper[matched],
+    mor    = as.numeric(ks_library$mor[matched]),
+    stringsAsFactors = FALSE
+  )
+  # Deduplicate network edges
+  network <- network[!duplicated(paste0(network$source, "|", network$target)), ]
+
+  message(sprintf("[KA] Matched %d KS pairs (%d kinases) from library to %d sites",
+                  nrow(network), length(unique(network$source)), nrow(mat)))
+
+  # Compute Z-score per kinase per contrast (RoKAI flavor, top performer
+  # in benchmarKIN evaluation, Nat Commun 2025)
+  # Z = s_bar * sqrt(m) / delta
+  #   s_bar = mean log2FC of kinase substrates
+  #   m     = number of matched substrates
+  #   delta = sd of log2FC across all sites
+  t0 <- proc.time()[["elapsed"]]
+  min_targets <- as.integer(min_targets)
+
+  # Group network targets by kinase
+  kinase_targets <- split(network$target, network$source)
+  # Filter kinases with too few substrates
+
+  kinase_targets <- kinase_targets[lengths(kinase_targets) >= min_targets]
+
+  if (length(kinase_targets) == 0)
+    stop("No kinases have enough matched substrates (min: ", min_targets, ").")
+
+  contrast_names <- colnames(mat)
+  res_list <- list()
+
+  for (j in seq_along(contrast_names)) {
+    fc_vec   <- mat[, j]
+    delta    <- sd(fc_vec, na.rm = TRUE)
+    if (is.na(delta) || delta == 0) delta <- 1  # avoid division by zero
+
+    for (kinase in names(kinase_targets)) {
+      targets <- kinase_targets[[kinase]]
+      sub_fc  <- fc_vec[targets]
+      sub_fc  <- sub_fc[!is.na(sub_fc)]
+      m       <- length(sub_fc)
+      if (m < min_targets) next
+
+      s_bar <- mean(sub_fc)
+      z     <- s_bar * sqrt(m) / delta  # RoKAI z-score (no background mean subtraction)
+      pval  <- pnorm(-abs(z))           # one-tailed
+
+      res_list[[length(res_list) + 1]] <- data.frame(
+        kinase       = kinase,
+        n_substrates = m,
+        score        = z,
+        p_value      = pval,
+        contrast     = contrast_names[j],
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+  res <- do.call(rbind, res_list)
+  message(sprintf("[KA] KSEA z-score: %.1fs", proc.time()[["elapsed"]] - t0))
+
+  if (is.null(res) || nrow(res) == 0)
+    stop("Kinase activity inference produced no results.")
+
+  # FDR correction per contrast
+  res <- do.call(rbind, lapply(split(res, res$contrast), function(df) {
+    df$adj_p_value <- stats::p.adjust(df$p_value, method = "BH")
+    df
+  }))
+  rownames(res) <- NULL
+  res
+}
+
+# --------------------------------------------------------------------------- #
 #  PTM-SEA (PTM Signature Enrichment Analysis) via ssGSEA2
 # --------------------------------------------------------------------------- #
 
