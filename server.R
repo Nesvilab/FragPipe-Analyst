@@ -878,6 +878,15 @@ server <- function(input, output, session) {
      # diff_all <- test_diff_customized(imputed_data(), type = "manual",
      #                      test = c("SampleTypeTumor"), design_formula = formula(~0+SampleType))
      data <- imputed_data()
+     conditions <- as.character(unique(colData(data)$condition))
+     validate(need(
+       length(conditions) >= 2,
+       paste0(
+         "Differential expression analysis requires at least 2 conditions. ",
+         "Only 1 condition ('", conditions[1], "') was detected in the experiment design. ",
+         "QC plots (PCA, sample correlation, missing values, etc.) are still available."
+       )
+     ))
      if (input$exp == "LFQ" & input$lfq_type == "Spectral Count") {
        assay(data) <- log2(assay(data))
      } else if (input$exp == "LFQ-peptide" & input$lfq_pept_type == "Spectral Count") {
@@ -1453,7 +1462,13 @@ server <- function(input, output, session) {
    })
    
    cvs_input<-reactive({
-     plot_cvs(dep(), id="label", scale=!input$cvs_full_range, check.names=F)
+     data <- imputed_data()
+     if (input$exp == "LFQ" & input$lfq_type == "Spectral Count") {
+       assay(data) <- log2(assay(data))
+     } else if (input$exp == "LFQ-peptide" & input$lfq_pept_type == "Spectral Count") {
+       assay(data) <- log2(assay(data))
+     }
+     plot_cvs(data, id="label", scale=!input$cvs_full_range, check.names=F)
    })
    
    num_total <- reactive({
