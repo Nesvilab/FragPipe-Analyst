@@ -974,7 +974,10 @@ ui <- function(request){shinyUI(
                           column(4,
                             tags$p(style = "margin-top:8px;",
                               tags$strong("Database:"),
-                              " Curated KS library (414 kinases)")
+                              " Curated KS library (414 kinases, human)",
+                              tags$br(),
+                              tags$span(style = "font-size:11px; color:#888;",
+                                "Müller-Dott et al., Nat Commun 2025"))
                           ),
                           column(3,
                             numericInput("kb_ka_min_targets", "Min substrates",
@@ -1122,16 +1125,24 @@ ui <- function(request){shinyUI(
                     # ---- Kinase-Substrate Network tab ----
                     tabPanel("Kinase-Substrate",
                       br(),
-                      p("Builds a network from PTM-SEA kinase results. ",
-                        "Run PTM-SEA in the Gene Set Explorer first.",
+                      p("Builds a kinase-substrate network using PTM-SEA or Kinase Activity results. ",
+                        "Run the chosen analysis in the Gene Set Explorer first.",
                         style = "color:#777; font-size:12px;"),
                       fluidRow(
                         column(9,
+                          fluidRow(
+                            column(4,
+                              selectInput("kb_ks_source", "Data source:",
+                                          choices = c("PTM-SEA" = "ptmsea",
+                                                      "Kinase Activity (Z-score)" = "zscore"),
+                                          selected = "ptmsea")
+                            )
+                          ),
                           tags$details(open = "open",
                             tags$summary(style = "cursor:pointer; color:#3c8dbc; font-size:12px;",
                                          icon("sliders"), " Kinase settings"),
                             fluidRow(
-                              column(3, numericInput("kb_ks_nes_cutoff", "|NES| cutoff",
+                              column(3, numericInput("kb_ks_nes_cutoff", "Score cutoff (|NES|/|Z|)",
                                                      min = 0, max = 10, value = 5, step = 0.5)),
                               column(3, numericInput("kb_ks_p_cutoff", "Kinase p cutoff",
                                                      min = 0, max = 1, value = 0.05, step = 0.01)),

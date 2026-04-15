@@ -3095,6 +3095,7 @@ output$download_density_svg<-downloadHandler(
     # Clear gene-set table selection and reset volcano to default labels
     DT::selectRows(kb_gs_table_proxy, NULL)
     DT::selectRows(kb_ptm_table_proxy, NULL)
+    DT::selectRows(kb_ka_table_proxy, NULL)
     session$resetBrush("kb_protein_brush")
   })
 
@@ -3102,6 +3103,7 @@ output$download_density_svg<-downloadHandler(
   observeEvent(input$kb_contrast, {
     DT::selectRows(kb_gs_table_proxy, NULL)
     DT::selectRows(kb_ptm_table_proxy, NULL)
+    DT::selectRows(kb_ka_table_proxy, NULL)
   }, ignoreInit = TRUE)
 
   output$kb_downloadVolcano <- downloadHandler(
@@ -3619,12 +3621,60 @@ output$download_density_svg<-downloadHandler(
     # dependencies regardless of which branch executes below.
     selected_rows <- input$kb_gs_table_rows_selected
     ptm_sel       <- input$kb_ptm_table_rows_selected
+    ka_sel        <- input$kb_ka_table_rows_selected
     active_tab    <- input$kb_gs_tabset
 
     gene_set_list <- NULL
     ptm_colors    <- NULL
 
-    if (identical(active_tab, "PTM-SEA") &&
+    if (identical(active_tab, "Kinase Activity") &&
+        !is.null(ka_sel) && length(ka_sel) == 1L) {
+      # --- Kinase Activity volcano overlay (site-level, single-select) ---
+      ka_tbl <- tryCatch(kb_ka_table_data(), error = function(e) NULL)
+      if (!is.null(ka_tbl) && nrow(ka_tbl) >= ka_sel && !is.null(kb_ka_library)) {
+        kinase_name <- ka_tbl[["Kinase"]][ka_sel]
+
+        # Look up substrates from curated library by flanking sequence
+        lib_seqs <- toupper(trimws(
+          kb_ka_library$sequence[kb_ka_library$source == kinase_name]
+        ))
+        lib_seqs <- lib_seqs[!is.na(lib_seqs) & nchar(lib_seqs) > 0L]
+
+        if (length(lib_seqs) > 0L) {
+          rd        <- as.data.frame(SummarizedExperiment::rowData(dep()))
+          sw_upper  <- toupper(trimws(rd$SequenceWindow))
+          matched   <- which(sw_upper %in% lib_seqs)
+
+          if (length(matched) > 0L) {
+            exp_type  <- metadata(dep())$exp
+            lvl_type  <- metadata(dep())$level
+            show_gene <- isTRUE(input$kb_show_gene)
+
+            volcano_names <- if (!show_gene) {
+              rd$Index
+            } else if (exp_type == "TMT" && lvl_type == "site") {
+              paste0(rd$Gene, "_", gsub(".*_", "", rd$ID))
+            } else if (exp_type == "TMT") {
+              paste0(rd$Gene, "_", rd$Peptide)
+            } else if (exp_type == "DIA" && lvl_type == "site") {
+              paste0(rd$Gene, "_", gsub(".*_", "", rd$ID))
+            } else if (exp_type == "DIA") {
+              if ("Gene" %in% colnames(rd))
+                paste0(rd$Gene, "_", rd$Peptide)
+              else
+                paste0(rd$Genes, "_", rd$Stripped.Sequence)
+            } else {
+              rd$Index
+            }
+
+            sub_names <- unique(volcano_names[matched])
+            gene_set_list <- setNames(list(sub_names), paste0(kinase_name, " substrates"))
+            ptm_colors    <- "#e74c3c"  # red, same as PTM-SEA expected-up
+          }
+        }
+      }
+
+    } else if (identical(active_tab, "PTM-SEA") &&
         !is.null(ptm_sel) && length(ptm_sel) == 1L) {
       # --- PTM-SEA volcano overlay (site-level, single-select) ---
       ptm_tbl <- tryCatch(kb_ptm_table_data(), error = function(e) NULL)
@@ -4004,6 +4054,14 @@ output$download_density_svg<-downloadHandler(
   })
 
   # --- Kinase-Substrate network ---
+  # Swap score cutoff default when source changes (NES=5 for PTM-SEA, Z=2 for Z-score)
+  observeEvent(input$kb_ks_source, {
+    if (!is.null(input$kb_ks_source)) {
+      default_cutoff <- if (input$kb_ks_source == "zscore") 2 else 5
+      updateNumericInput(session, "kb_ks_nes_cutoff", value = default_cutoff)
+    }
+  }, ignoreInit = TRUE)
+
   output$kb_ks_net_ui <- renderUI({
     req(input$kb_run_ks_net)
     shinycssloaders::withSpinner(
@@ -4012,17 +4070,30 @@ output$download_density_svg<-downloadHandler(
   })
 
   observeEvent(input$kb_run_ks_net, {
-    ptm_res <- kb_ptm_results()
-    if (is.null(ptm_res) || nrow(ptm_res) == 0) {
-      showNotification("Run PTM-SEA first in the Gene Set Explorer tab.",
-                       type = "warning", duration = 5)
-      return()
+    ks_source <- input$kb_ks_source %||% "ptmsea"
+
+    if (ks_source == "zscore") {
+      ka_res <- kb_ka_results()
+      if (is.null(ka_res) || nrow(ka_res) == 0) {
+        showNotification("Run Kinase Activity inference first in the Gene Set Explorer tab.",
+                         type = "warning", duration = 5)
+        return()
+      }
+      kinase_data <- ka_res
+    } else {
+      ptm_res <- kb_ptm_results()
+      if (is.null(ptm_res) || nrow(ptm_res) == 0) {
+        showNotification("Run PTM-SEA first in the Gene Set Explorer tab.",
+                         type = "warning", duration = 5)
+        return()
+      }
+      kinase_data <- ptm_res
     }
 
     result <- tryCatch(
       withProgress(message = "Building kinase-substrate network...", value = 0.3, {
         res <- plot_kinase_substrate_network(
-          ptmsea_results  = ptm_res,
+          ptmsea_results  = kinase_data,
           dep             = dep(),
           contrast        = input$kb_contrast,
           species         = input$kb_ptm_species %||% "human",
@@ -4033,7 +4104,9 @@ output$download_density_svg<-downloadHandler(
           site_lfc_cutoff = input$kb_ks_site_lfc %||% 0,
           site_p_cutoff   = input$kb_ks_site_p %||% 1,
           site_use_adjp   = isTRUE(input$kb_ks_site_use_adjp),
-          hide_empty_kinases = isTRUE(input$kb_ks_hide_empty)
+          hide_empty_kinases = isTRUE(input$kb_ks_hide_empty),
+          source_type     = ks_source,
+          ks_library      = if (ks_source == "zscore") kb_ka_library else NULL
         )
         incProgress(0.7)
         res
@@ -4049,7 +4122,10 @@ output$download_density_svg<-downloadHandler(
 
     output$kb_ks_network <- visNetwork::renderVisNetwork({ result$network })
     output$kb_ks_legend_ui <- renderUI({
-      kinase_substrate_legend_html(max_nes = result$meta$max_nes)
+      kinase_substrate_legend_html(
+        max_nes     = result$meta$max_nes,
+        score_label = result$meta$score_label %||% "NES"
+      )
     })
   })
 
