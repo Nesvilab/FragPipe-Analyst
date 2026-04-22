@@ -1749,6 +1749,81 @@ server <- function(input, output, session) {
     })
   })
   
+  # ===========================================================================
+  # AI INTERPRETATION TAB
+  # ===========================================================================
+
+  # -- Contrast selector UI --------------------------------------------------
+  # Populated after the user runs analysis (dep() becomes available)
+  output$ai_contrast_ui <- renderUI({
+    req(dep())
+    cntrsts <- comparisons()
+    req(cntrsts)
+    selectInput("ai_contrast",
+                label   = "Select comparison:",
+                choices = cntrsts,
+                selected = cntrsts[1])
+  })
+
+  # -- Safely access enrichment reactives ------------------------------------
+  # go_results() and pathway_results() are eventReactive — they error before
+  # their buttons are clicked.  We wrap each in tryCatch so the AI tab works
+  # even when the user hasn't run enrichment yet.
+  ai_enrich_df <- reactive({
+    go_res <- tryCatch(go_results(),      error = function(e) NULL)
+    pa_res <- tryCatch(pathway_results(), error = function(e) NULL)
+    combine_enrich_results(go_res, pa_res)
+  })
+
+  # -- Generate prompt on button click ---------------------------------------
+  # ignoreInit = TRUE: do not fire at app startup (button value starts at 0)
+  ai_generated_prompt <- eventReactive(input$generate_ai_prompt, {
+    req(dep(), input$ai_contrast)
+
+    enrich_data <- if (isTRUE(input$ai_include_enrich)) ai_enrich_df() else NULL
+
+    build_llm_prompt(
+      dep            = dep(),
+      contrast       = input$ai_contrast,
+      enrich_df      = enrich_data,
+      include_de     = isTRUE(input$ai_include_de),
+      include_enrich = isTRUE(input$ai_include_enrich) && !is.null(enrich_data),
+      top_n_genes    = as.integer(input$ai_top_n_genes),
+      top_n_paths    = as.integer(input$ai_top_n_paths),
+      lfc_thresh     = as.numeric(input$ai_lfc),
+      alpha          = as.numeric(input$ai_alpha),
+      user_context   = input$ai_context,
+      prompt_style   = input$ai_style
+    )
+  }, ignoreInit = TRUE)
+
+  # -- Character/token count display ----------------------------------------
+  output$ai_length_info <- renderUI({
+    pt <- tryCatch(ai_generated_prompt(), error = function(e) NULL)
+    if (is.null(pt) || nchar(pt) == 0) return(NULL)
+    span(style = "color:#555; font-size:12px;",
+         icon("circle-info"), " ", prompt_length_summary(pt))
+  })
+
+  # -- Push prompt text into the textarea -----------------------------------
+  observeEvent(ai_generated_prompt(), {
+    updateTextAreaInput(session, "ai_prompt_display",
+                        value = ai_generated_prompt())
+  })
+
+  # -- Download handler ------------------------------------------------------
+  output$ai_download_btn <- downloadHandler(
+    filename = function() {
+      contrast_safe <- gsub("[^A-Za-z0-9_-]", "_", input$ai_contrast)
+      paste0("LLM_prompt_", contrast_safe, "_",
+             format(Sys.time(), "%Y%m%d_%H%M%S"), ".txt")
+    },
+    content = function(file) {
+      req(ai_generated_prompt())
+      writeLines(ai_generated_prompt(), file)
+    }
+  )
+
   ##### Logging observers
   observeEvent(processed_data(), {
     se <- processed_data()

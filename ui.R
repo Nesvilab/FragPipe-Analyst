@@ -184,6 +184,10 @@ ui <- function(request){shinyUI(
         )),
         # convertMenuItem(menuItem('Demo', icon=icon("eye"), tabName = "demo"), tabName = "demo"),
         convertMenuItem(
+          tabName = "ai_interp",
+          menuItem("AI Interpretation", tabName = "ai_interp", icon = icon("robot"))
+        ),
+        convertMenuItem(
           tabName = "info",
           menuItem('Documentation', icon=icon("question"),
                     tabName = "info"))
@@ -210,6 +214,30 @@ ui <- function(request){shinyUI(
           return "Changes that you made may not be saved.";
         };')
       ))),
+
+      tags$head(tags$script(HTML("
+        function copyAiPrompt() {
+          var ta = document.getElementById('ai_prompt_display');
+          if (!ta || !ta.value) return;
+          if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(ta.value).then(function() {
+              var btn = document.getElementById('ai_copy_btn');
+              var orig = btn.innerHTML;
+              btn.innerHTML = '<i class=\"fa fa-check\"></i> Copied!';
+              btn.classList.add('btn-success');
+              btn.classList.remove('btn-default');
+              setTimeout(function() {
+                btn.innerHTML = orig;
+                btn.classList.add('btn-default');
+                btn.classList.remove('btn-success');
+              }, 2500);
+            });
+          } else {
+            ta.select();
+            document.execCommand('copy');
+          }
+        }
+      "))),
 
       ## Add side menu
       tabItems(
@@ -828,6 +856,189 @@ ui <- function(request){shinyUI(
       #bookmarkButton()
         )), #analysis tab close
       
+      # ================================================================
+      # AI INTERPRETATION TAB
+      # ================================================================
+      tabItem(tabName = "ai_interp",
+
+        # Privacy notice
+        fluidRow(
+          box(
+            width = 12, status = "warning", solidHeader = FALSE,
+            p(icon("triangle-exclamation"),
+              tags$b("Data privacy notice:"),
+              " The prompt generated here will contain your analysis results",
+              " (gene names, fold changes, p-values, and pathway terms).",
+              " Before pasting into an external LLM service, ensure this is",
+              " consistent with your data sharing and publication policies.",
+              " Your data is NOT sent automatically — you control where it goes.")
+          )
+        ),
+
+        fluidRow(
+
+          # ---- Left panel: controls ----------------------------------------
+          box(
+            title = "Configure Prompt", width = 4,
+            status = "primary", solidHeader = TRUE,
+
+            # Contrast selector (populated server-side after analysis)
+            uiOutput("ai_contrast_ui"),
+
+            tags$hr(),
+            h5(tags$b("Include in prompt:")),
+            checkboxInput("ai_include_de",
+                          "Differential expression results", value = TRUE),
+            checkboxInput("ai_include_enrich",
+                          "Enrichment analysis results (if run)", value = TRUE),
+
+            tags$hr(),
+            h5(tags$b("Gene list settings:")),
+            fluidRow(
+              column(6,
+                numericInput("ai_top_n_genes", "Max genes (each direction)",
+                             value = 30, min = 5, max = 200, step = 5)
+              ),
+              column(6,
+                numericInput("ai_lfc", "log2FC cutoff",
+                             value = 1, min = 0, max = 10, step = 0.1)
+              )
+            ),
+            fluidRow(
+              column(6,
+                numericInput("ai_top_n_paths", "Max pathways",
+                             value = 20, min = 5, max = 50, step = 5)
+              ),
+              column(6,
+                numericInput("ai_alpha", "Adj. p cutoff",
+                             value = 0.05, min = 0.001, max = 1, step = 0.005)
+              )
+            ),
+
+            tags$hr(),
+            h5(tags$b("Prompt style:")),
+            radioButtons("ai_style", label = NULL,
+              choices = c(
+                "Biological summary"         = "summary",
+                "Hypothesis generation"      = "hypothesis",
+                "Manuscript results section" = "methods",
+                "Peer review perspective"    = "review"
+              ),
+              selected = "summary"
+            ),
+
+            tags$hr(),
+            textAreaInput(
+              "ai_context",
+              label   = "Experiment context (optional):",
+              value   = "",
+              width   = "100%",
+              height  = "90px",
+              placeholder = paste0(
+                "E.g., 'Phosphoproteomic study of EGFR inhibitor-treated ",
+                "A549 lung cancer cells, 24h treatment, n=4 replicates.'"
+              )
+            ),
+
+            actionButton(
+              "generate_ai_prompt", "Generate Prompt",
+              icon  = icon("wand-magic-sparkles"),
+              class = "btn-primary btn-block",
+              style = "margin-top:6px;"
+            )
+          ), # left box close
+
+          # ---- Right panel: output -----------------------------------------
+          box(
+            title = "Generated Prompt", width = 8,
+            status = "success", solidHeader = TRUE,
+
+            # Stats bar
+            fluidRow(
+              column(12,
+                div(style = "color:#555; font-size:12px; margin-bottom:6px;",
+                    uiOutput("ai_length_info"))
+              )
+            ),
+
+            # The prompt text area — editable so user can tweak before copying
+            tags$style(HTML("
+              #ai_prompt_display {
+                font-family: 'Courier New', monospace;
+                font-size: 12px;
+                resize: vertical;
+                background-color: #fafafa;
+                height: 420px;
+              }
+            ")),
+            textAreaInput(
+              inputId     = "ai_prompt_display",
+              label       = NULL,
+              value       = "",
+              width       = "100%",
+              height      = "420px",
+              placeholder = paste0(
+                "Configure options on the left and click 'Generate Prompt'.\n\n",
+                "The prompt will appear here — you can edit it before copying."
+              )
+            ),
+
+            tags$br(),
+
+            # Action row: copy / download / open-in links
+            fluidRow(
+              column(3,
+                tags$button(
+                  id      = "ai_copy_btn",
+                  class   = "btn btn-default btn-block",
+                  onclick = "copyAiPrompt()",
+                  icon("copy"), " Copy to Clipboard"
+                )
+              ),
+              column(3,
+                downloadButton("ai_download_btn", "Download .txt",
+                               class = "btn-default btn-block")
+              ),
+              column(6,
+                div(style = "padding-top:7px; font-size:13px;",
+                    "Open in: ",
+                    a(href = "https://claude.ai", target = "_blank",
+                      icon("comment-dots"), "Claude"),
+                    HTML("&nbsp;&middot;&nbsp;"),
+                    a(href = "https://chatgpt.com", target = "_blank",
+                      "ChatGPT"),
+                    HTML("&nbsp;&middot;&nbsp;"),
+                    a(href = "https://gemini.google.com", target = "_blank",
+                      "Gemini"),
+                    HTML("&nbsp;&middot;&nbsp;"),
+                    a(href = "https://www.perplexity.ai", target = "_blank",
+                      "Perplexity")
+                )
+              )
+            ), # action row close
+
+            tags$br(),
+
+            # Tips box
+            div(
+              class = "alert alert-info",
+              style = "font-size:12px; margin-top:4px;",
+              tags$b("Tips:"),
+              tags$ul(style = "margin-bottom:0;",
+                tags$li("Run ", tags$b("Pathway Enrichment"), " or ",
+                        tags$b("Gene Ontology"), " analysis first to include",
+                        " pathway context in the prompt."),
+                tags$li("The prompt is plain text — feel free to edit it directly",
+                        " before copying."),
+                tags$li("For multi-condition experiments, generate one prompt",
+                        " per contrast and compare the LLM responses.")
+              )
+            )
+
+          ) # right box close
+        ) # fluidRow close
+      ), # ai_interp tab close
+
       tabItem(tabName = "info",
               fluidRow( 
                box(
