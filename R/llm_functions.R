@@ -204,18 +204,29 @@ format_enrichment_table <- function(enrich_df, contrast,
   df <- head(df, top_n)
 
   # Determine database column name
-  db_col <- if ("var" %in% colnames(df)) "var" else
-            if ("database" %in% colnames(df)) "database" else NULL
+  db_col  <- if ("var"      %in% colnames(df)) "var"      else
+             if ("database" %in% colnames(df)) "database" else NULL
+  has_dir <- "direction" %in% colnames(df)   # added by server accumulator
 
   lines <- mapply(function(i) {
     row    <- df[i, , drop = FALSE]
     term   <- as.character(row$Term)
-    db_tag <- if (!is.null(db_col)) paste0("[", row[[db_col]], "] ") else ""
-    pv     <- formatC(as.numeric(row[[p_col]]), format = "e", digits = 1)
+
+    # Build tag: "[Hallmark | UP] " or "[MF] " depending on what's available
+    db_str  <- if (!is.null(db_col)) as.character(row[[db_col]]) else ""
+    dir_str <- if (has_dir && !is.na(row$direction)) as.character(row$direction) else ""
+    tag_inner <- if (nchar(dir_str) > 0 && nchar(db_str) > 0) {
+      paste0(db_str, " | ", dir_str)
+    } else {
+      paste0(db_str, dir_str)
+    }
+    db_tag <- if (nchar(tag_inner) > 0) paste0("[", tag_inner, "] ") else ""
+
+    pv <- formatC(as.numeric(row[[p_col]]), format = "e", digits = 1)
 
     # Gene ratio / overlap string
     gr <- if ("GeneRatio" %in% colnames(row)) as.character(row$GeneRatio)
-          else if ("Overlap"   %in% colnames(row)) as.character(row$Overlap)
+          else if ("Overlap" %in% colnames(row)) as.character(row$Overlap)
           else "N/A"
 
     # Top overlapping genes

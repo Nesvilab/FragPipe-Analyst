@@ -891,6 +891,7 @@ ui <- function(request){shinyUI(
                           "Differential expression results", value = TRUE),
             checkboxInput("ai_include_enrich",
                           "Enrichment analysis results (if run)", value = TRUE),
+            uiOutput("ai_enrich_summary"),
 
             tags$hr(),
             h5(tags$b("Gene list settings:")),
