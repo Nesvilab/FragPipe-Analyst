@@ -730,7 +730,7 @@ server <- function(input, output, session) {
          selected_cols <- which(!(cols %in% interest_cols))
        test_match_tmt_column_design(data_unique, selected_cols, temp_exp_design)
        # TMT-I report is already log2 transformed
-       data_se <- make_se_customized(data_unique, selected_cols, temp_exp_design, exp="TMT", level="peptide")
+       data_se <- make_se_customized(data_unique, selected_cols, temp_exp_design, exp="TMT", level=gsub(".*-", "", input$exp))
        return(data_se)
      }
    })
