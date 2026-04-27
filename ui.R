@@ -1,5 +1,5 @@
 # Define UI for data upload app ----
-VERSION <- "v1.23"
+VERSION <- "v1.25"
 DEBUG <- T
 ENABLE_PEPTIDE_ANALYSIS <- T
 if (ENABLE_PEPTIDE_ANALYSIS) {

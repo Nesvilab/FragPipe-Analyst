@@ -737,7 +737,7 @@ server <- function(input, output, session) {
          selected_cols <- which(!(cols %in% interest_cols))
        test_match_tmt_column_design(data_unique, selected_cols, temp_exp_design)
        # TMT-I report is already log2 transformed
-       data_se <- make_se_customized(data_unique, selected_cols, temp_exp_design, exp="TMT", level="peptide")
+       data_se <- make_se_customized(data_unique, selected_cols, temp_exp_design, exp="TMT", level=gsub(".*-", "", input$exp))
        return(data_se)
      }
    })
@@ -885,33 +885,42 @@ server <- function(input, output, session) {
      # diff_all <- test_diff_customized(imputed_data(), type = "manual",
      #                      test = c("SampleTypeTumor"), design_formula = formula(~0+SampleType))
      data <- imputed_data()
+     conditions <- as.character(unique(colData(data)$condition))
+     validate(need(
+       length(conditions) >= 2,
+       paste0(
+         "Differential expression analysis requires at least 2 conditions. ",
+         "Only 1 condition ('", conditions[1], "') was detected in the experiment design. ",
+         "QC plots (PCA, sample correlation, missing values, etc.) are still available."
+       )
+     ))
      if (input$exp == "LFQ" & input$lfq_type == "Spectral Count") {
        assay(data) <- log2(assay(data))
      } else if (input$exp == "LFQ-peptide" & input$lfq_pept_type == "Spectral Count") {
        assay(data) <- log2(assay(data))
      }
+     # Parse control condition if provided
+     control <- NULL
+     if (nzchar(input$control_condition)) {
+       if (!grepl(";", input$control_condition)) {
+         control <- input$control_condition
+       } else {
+         control <- unlist(str_split(input$control_condition, ";"))
+       }
+     }
+
      if(input$fdr_correction=="BH"){
        if (input$DE_type == "all") {
-         diff_all <- test_limma_customized(data, type="all", paired = F)
+         diff_all <- test_limma_customized(data, type="all", control=control, paired = F)
        } else if (input$DE_type == "control") {
-         if (!grepl(";", input$control_condition)) {
-           control <- input$control_condition
-         } else {
-           control <- unlist(str_split(input$control_condition, ";"))
-         }
          diff_all <- test_limma_customized(data, type="control", control=control, paired = F)
        } else if (input$DE_type == "others") {
          diff_all <- test_limma_customized(data, type="others", paired = F)
        }
      } else { # t-statistics-based
        if (input$DE_type == "all") {
-         diff_all <- test_diff_customized(data, type = "all")
+         diff_all <- test_diff_customized(data, type = "all", control=control)
        } else if (input$DE_type == "control") {
-         if (!grepl(";", input$control_condition)) {
-           control <- input$control_condition
-         } else {
-           control <- unlist(str_split(input$control_condition, ";"))
-         }
          diff_all <- test_diff_customized(data, type="control", control=control)
        } else if (input$DE_type == "others") {
          diff_all <- test_diff_customized(data, type="others")
@@ -927,6 +936,22 @@ server <- function(input, output, session) {
        if(input$DE_type == "all") {
          # All possible combinations
          cntrst <- apply(utils::combn(conditions, 2), 2, paste, collapse = " - ")
+         # If control condition is specified, flip so control is always the denominator
+         if (nzchar(input$control_condition)) {
+           if (!grepl(";", input$control_condition)) {
+             control <- input$control_condition
+           } else {
+             control <- unlist(str_split(input$control_condition, ";"))
+           }
+           for (ctrl in control) {
+             flip <- grep(paste0("^", ctrl, " - "), cntrst)
+             if (length(flip) >= 1) {
+               cntrst[flip] <- cntrst[flip] %>%
+                 gsub(paste0(ctrl, " - "), "", .) %>%
+                 paste0(" - ", ctrl)
+             }
+           }
+         }
        } else if (input$DE_type == "control") {
          if (!grepl(";", input$control_condition)) {
            control <- input$control_condition
@@ -1444,7 +1469,13 @@ server <- function(input, output, session) {
    })
    
    cvs_input<-reactive({
-     plot_cvs(dep(), id="label", scale=!input$cvs_full_range, check.names=F)
+     data <- imputed_data()
+     if (input$exp == "LFQ" & input$lfq_type == "Spectral Count") {
+       assay(data) <- log2(assay(data))
+     } else if (input$exp == "LFQ-peptide" & input$lfq_pept_type == "Spectral Count") {
+       assay(data) <- log2(assay(data))
+     }
+     plot_cvs(data, id="label", scale=!input$cvs_full_range, check.names=F)
    })
    
    num_total <- reactive({
