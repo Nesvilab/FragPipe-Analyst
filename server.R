@@ -1780,6 +1780,150 @@ server <- function(input, output, session) {
     })
   })
   
+  # ===========================================================================
+  # AI INTERPRETATION TAB
+  # ===========================================================================
+
+  # -- Contrast selector UI --------------------------------------------------
+  # Populated after the user runs analysis (dep() becomes available)
+  output$ai_contrast_ui <- renderUI({
+    req(dep())
+    cntrsts <- comparisons()
+    req(cntrsts)
+    selectInput("ai_contrast",
+                label   = "Select comparison:",
+                choices = cntrsts,
+                selected = cntrsts[1])
+  })
+
+  # -- Accumulate enrichment results across multiple runs ---------------------
+  # Named list: run_key -> data.frame.
+  # Key = "<type>_<database>_<direction>", e.g. "pa_Hallmark_UP".
+  # Re-running the same db+direction overwrites; a different direction appends.
+  ai_enrich_store <- reactiveVal(list())
+
+  # Reset the store whenever a fresh analysis is run
+  observeEvent(dep(), {
+    ai_enrich_store(list())
+  }, ignoreInit = TRUE)
+
+  # Append GO results each time the GO button is clicked.
+  # Watching input$go_analysis (the button) directly is more reliable than
+  # watching go_results() — the same db run UP then DOWN produces two distinct
+  # reactive recomputations but Shiny may not always detect them as distinct
+  # "changes" when the result structure is identical.
+  observeEvent(input$go_analysis, {
+    run_dir <- input$go_direction   # capture before any async re-render
+    run_db  <- input$go_database
+    run_key <- paste0("go_", run_db, "_", run_dir)
+    new_df  <- tryCatch(go_results(), error = function(e) NULL)
+    if (!is.null(new_df) && is.data.frame(new_df) && nrow(new_df) > 0) {
+      new_df$direction <- run_dir   # tag so format function can label UP/DOWN
+      store <- ai_enrich_store()
+      store[[run_key]] <- new_df
+      ai_enrich_store(store)
+    }
+  }, ignoreInit = TRUE)
+
+  # Append pathway results each time the pathway button is clicked.
+  observeEvent(input$pathway_analysis, {
+    run_dir <- input$pathway_direction
+    run_db  <- input$pathway_database
+    run_key <- paste0("pa_", run_db, "_", run_dir)
+    new_df  <- tryCatch(pathway_results(), error = function(e) NULL)
+    if (!is.null(new_df) && is.data.frame(new_df) && nrow(new_df) > 0) {
+      new_df$direction <- run_dir
+      store <- ai_enrich_store()
+      store[[run_key]] <- new_df
+      ai_enrich_store(store)
+    }
+  }, ignoreInit = TRUE)
+
+  # Combine all stored runs into one data frame for the prompt builder
+  ai_enrich_df <- reactive({
+    store <- ai_enrich_store()
+    if (length(store) == 0) return(NULL)
+    dfs <- Filter(function(d) !is.null(d) && nrow(d) > 0, store)
+    if (length(dfs) == 0) return(NULL)
+    common_cols <- Reduce(intersect, lapply(dfs, colnames))
+    do.call(rbind, lapply(dfs, function(d) d[, common_cols, drop = FALSE]))
+  })
+
+  # Summary of what enrichment runs have been accumulated (shown in UI)
+  output$ai_enrich_summary <- renderUI({
+    store <- ai_enrich_store()
+    if (length(store) == 0) {
+      return(p(style = "color:#888; font-size:11px; margin:0;",
+               icon("circle-info"),
+               " No enrichment runs yet. Run GO or Pathway analysis to include pathway context."))
+    }
+    items <- lapply(names(store), function(k) {
+      df    <- store[[k]]
+      n_sig <- if (!is.null(df)) nrow(df[df$Adjusted.P.value < 0.05, , drop = FALSE]) else 0
+      # Parse key: "go_MF_UP" or "pa_Hallmark_DOWN"
+      parts   <- strsplit(k, "_")[[1]]
+      type    <- if (parts[1] == "go") "GO" else "Pathway"
+      db_name <- paste(parts[-c(1, length(parts))], collapse = " ")
+      dir     <- parts[length(parts)]
+      tags$li(style = "font-size:11px;",
+              sprintf("%s: %s (%s) — %d sig. terms", type, db_name, dir, n_sig))
+    })
+    tagList(
+      p(style = "color:#555; font-size:11px; margin-bottom:2px;",
+        tags$b("Accumulated enrichment runs:")),
+      tags$ul(style = "padding-left:16px; margin:0;", items)
+    )
+  })
+
+  # -- Generate prompt on button click ---------------------------------------
+  # ignoreInit = TRUE: do not fire at app startup (button value starts at 0)
+  ai_generated_prompt <- eventReactive(input$generate_ai_prompt, {
+    req(dep(), input$ai_contrast)
+
+    enrich_data <- if (isTRUE(input$ai_include_enrich)) ai_enrich_df() else NULL
+
+    build_llm_prompt(
+      dep            = dep(),
+      contrast       = input$ai_contrast,
+      enrich_df      = enrich_data,
+      include_de     = isTRUE(input$ai_include_de),
+      include_enrich = isTRUE(input$ai_include_enrich) && !is.null(enrich_data),
+      top_n_genes    = as.integer(input$ai_top_n_genes),
+      top_n_paths    = as.integer(input$ai_top_n_paths),
+      lfc_thresh     = as.numeric(input$ai_lfc),
+      alpha          = as.numeric(input$ai_alpha),
+      user_context   = input$ai_context,
+      prompt_style   = input$ai_style
+    )
+  }, ignoreInit = TRUE)
+
+  # -- Character/token count display ----------------------------------------
+  output$ai_length_info <- renderUI({
+    pt <- tryCatch(ai_generated_prompt(), error = function(e) NULL)
+    if (is.null(pt) || nchar(pt) == 0) return(NULL)
+    span(style = "color:#555; font-size:12px;",
+         icon("circle-info"), " ", prompt_length_summary(pt))
+  })
+
+  # -- Push prompt text into the textarea -----------------------------------
+  observeEvent(ai_generated_prompt(), {
+    updateTextAreaInput(session, "ai_prompt_display",
+                        value = ai_generated_prompt())
+  })
+
+  # -- Download handler ------------------------------------------------------
+  output$ai_download_btn <- downloadHandler(
+    filename = function() {
+      contrast_safe <- gsub("[^A-Za-z0-9_-]", "_", input$ai_contrast)
+      paste0("LLM_prompt_", contrast_safe, "_",
+             format(Sys.time(), "%Y%m%d_%H%M%S"), ".txt")
+    },
+    content = function(file) {
+      req(ai_generated_prompt())
+      writeLines(ai_generated_prompt(), file)
+    }
+  )
+
   ##### Logging observers
   observeEvent(processed_data(), {
     se <- processed_data()
