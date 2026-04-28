@@ -84,9 +84,13 @@ LOADED_GMT_FILES <- local({
   }), sub("\\.gmt$", "", basename(files)))
 })
 
-GO_TERM2NAME <- tryCatch(
-  suppressMessages(AnnotationDbi::select(
+GO_TERM2NAME <- tryCatch({
+  t2n <- suppressMessages(AnnotationDbi::select(
     GO.db::GO.db,
     keys    = AnnotationDbi::keys(GO.db::GO.db, "GOID"),
-    columns = "TERM", keytype = "GOID")),
-  error = function(e) { message("GO.db unavailable; GO terms will show IDs."); NULL })
+    columns = "TERM", keytype = "GOID"))
+  t2n$TERM <- ifelse(!is.na(t2n$TERM),
+                     paste0(t2n$GOID, " (", t2n$TERM, ")"),
+                     t2n$GOID)
+  t2n
+}, error = function(e) { message("GO.db unavailable; GO terms will show IDs."); NULL })
