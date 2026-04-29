@@ -51,6 +51,7 @@ server <- function(input, output, session) {
       if (all(is.na(exp$replicate))) {
         showTab(inputId = "tab_panels", target = "quantification_panel")
         showTab(inputId="qc_tabBox", target="missingval_heatmap_tab")
+        showTab(inputId = "tab_panels", target = "kb_panel")
         updateTabsetPanel(session, "tab_panels", selected = "quantification_panel")
       } else {
         showTab(inputId = "tab_panels", target = "quantification_panel")
@@ -58,6 +59,7 @@ server <- function(input, output, session) {
         showTab(inputId="qc_tabBox", target="sample_coverage_tab")
         # make sure occ_panel visible after users updating their analysis
         showTab(inputId = "tab_panels", target = "occ_panel")
+        showTab(inputId = "tab_panels", target = "kb_panel")
         updateTabsetPanel(session, "tab_panels", selected = "quantification_panel")
       }
       shinyjs::show("venn_filter")
@@ -66,17 +68,20 @@ server <- function(input, output, session) {
       hideTab(inputId="qc_tabBox", target="sample_coverage_tab")
       showTab(inputId="qc_tabBox", target="missingval_heatmap_tab")
       showTab(inputId = "tab_panels", target = "quantification_panel")
+      showTab(inputId = "tab_panels", target = "kb_panel")
       updateTabsetPanel(session, "tab_panels", selected = "quantification_panel")
     } else if (input$exp == "DIA"){ # DIA
       showTab(inputId = "tab_panels", target = "occ_panel")
       showTab(inputId="qc_tabBox", target="sample_coverage_tab")
       showTab(inputId="qc_tabBox", target="missingval_heatmap_tab")
+      showTab(inputId = "tab_panels", target = "kb_panel")
       updateTabsetPanel(session, "tab_panels", selected = "quantification_panel")
       shinyjs::hide("venn_filter")
     } else if (input$exp %in% c("DIA-peptide", "DIA-site")) {
       hideTab(inputId = "tab_panels", target = "occ_panel")
       showTab(inputId="qc_tabBox", target="sample_coverage_tab")
       hideTab(inputId="qc_tabBox", target="missingval_heatmap_tab")
+      showTab(inputId = "tab_panels", target = "kb_panel")
       updateTabsetPanel(session, "tab_panels", selected = "quantification_panel")
       shinyjs::hide("venn_filter")
     } else if (input$exp %in% c("TMT-peptide", "TMT-site")) {
@@ -84,11 +89,13 @@ server <- function(input, output, session) {
       hideTab(inputId="qc_tabBox", target="missingval_heatmap_tab")
       hideTab(inputId="qc_tabBox", target="sample_coverage_tab")
       showTab(inputId = "tab_panels", target = "quantification_panel")
+      showTab(inputId = "tab_panels", target = "kb_panel")
       updateTabsetPanel(session, "tab_panels", selected = "quantification_panel")
     } else { # LFQ-peptide
       hideTab(inputId = "tab_panels", target = "occ_panel")
       hideTab(inputId="qc_tabBox", target="missingval_heatmap_tab")
       showTab(inputId="qc_tabBox", target="sample_coverage_tab")
+      showTab(inputId = "tab_panels", target = "kb_panel")
       updateTabsetPanel(session, "tab_panels", selected = "quantification_panel")
       shinyjs::hide("venn_filter")
     }
@@ -3097,4 +3104,1151 @@ output$download_density_svg<-downloadHandler(
  #     # )
  #   }
  # )
+
+# ===========================================================================
+## KNOWLEDGE BASED ANALYSIS
+# ===========================================================================
+
+  # --- Dynamic contrast selector ---
+  output$kb_contrast_selector <- renderUI({
+    req(dep())
+    df   <- SummarizedExperiment::rowData(dep())
+    cols <- grep("_significant$", colnames(df))
+    selectizeInput("kb_contrast", "Comparison",
+                   choices = gsub("_significant", "", colnames(df)[cols]))
+  })
+
+  output$kb_volcano <- renderPlot({
+    kb_volcano_input()
+  })
+
+  observeEvent(input$kb_resetPlot, {
+    # Clear gene-set table selection and reset volcano to default labels
+    DT::selectRows(kb_gs_table_proxy, NULL)
+    DT::selectRows(kb_ptm_table_proxy, NULL)
+    DT::selectRows(kb_ka_table_proxy, NULL)
+    session$resetBrush("kb_protein_brush")
+  })
+
+  # When contrast changes, clear table selections so stale highlights don't persist
+  observeEvent(input$kb_contrast, {
+    DT::selectRows(kb_gs_table_proxy, NULL)
+    DT::selectRows(kb_ptm_table_proxy, NULL)
+    DT::selectRows(kb_ka_table_proxy, NULL)
+  }, ignoreInit = TRUE)
+
+  output$kb_downloadVolcano <- downloadHandler(
+    filename = function() paste0("Volcano_", input$kb_contrast, ".pdf"),
+    content  = function(file) {
+      pdf(file)
+      print(kb_volcano_input())
+      dev.off()
+    }
+  )
+
+  # --- KB table downloads (full data, all contrasts) ---
+  output$kb_dl_ora_table <- downloadHandler(
+    filename = function() "ORA_results.csv",
+    content  = function(file) {
+      res <- kb_gs_ora_results()
+      validate(need(!is.null(res), "No ORA results to download."))
+      write.csv(res, file, row.names = FALSE)
+    }
+  )
+
+  output$kb_dl_ptm_table <- downloadHandler(
+    filename = function() "PTM_SEA_results.csv",
+    content  = function(file) {
+      res <- kb_ptm_results()
+      validate(need(!is.null(res), "No PTM-SEA results to download."))
+      write.csv(res, file, row.names = FALSE)
+    }
+  )
+
+  output$kb_dl_ka_table <- downloadHandler(
+    filename = function() "Kinase_Activity_results.csv",
+    content  = function(file) {
+      res <- kb_ka_results()
+      validate(need(!is.null(res), "No Kinase Activity results to download."))
+      write.csv(res, file, row.names = FALSE)
+    }
+  )
+
+  # --- ORA heatmap PDF download ---
+  output$kb_dl_ora_heatmap <- downloadHandler(
+    filename = function() paste0("ORA_heatmap_", input$kb_ora_database, ".pdf"),
+    content  = function(file) {
+      res <- kb_gs_ora_results()
+      validate(need(!is.null(res) && "var" %in% colnames(res),
+                    "No ORA results to download."))
+      ora_res <- dplyr::filter(res, var == input$kb_ora_database)
+      if (isTRUE(input$kb_ora_ctrl_only) && !is.null(input$kb_ora_control) &&
+          "contrast" %in% colnames(ora_res)) {
+        ctrl <- input$kb_ora_control
+        ora_res <- dplyr::filter(ora_res,
+                                 grepl(paste0("_vs_", ctrl, "$"), contrast) |
+                                 grepl(paste0("^", ctrl, "_vs_"), contrast))
+      }
+      validate(need(nrow(ora_res) > 0, "No data after filtering."))
+      hm <- plot_ora_heatmap(
+        ora_results = ora_res,
+        value_type  = input$kb_ora_value_type,
+        alpha       = input$kb_ora_alpha,
+        use_adjp    = isTRUE(input$kb_ora_use_adjp)
+      )
+      pdf(file, width = 10, height = max(4, length(unique(ora_res$Term)) * 0.25 + 2))
+      ComplexHeatmap::draw(hm)
+      dev.off()
+    }
+  )
+
+  # ===========================================================================
+  # GENE SET EXPLORER
+  # ===========================================================================
+
+  # Up to 5 highlight colors for multi-set volcano
+  KB_GS_COLORS <- c("#e74c3c", "#3498db", "#9b59b6")  # Set A, Set B, Overlap
+
+  # --- Database selector UI (multi-select) ---
+  output$kb_gs_database_ui <- renderUI({
+    builtin <- c(
+      "KEGG"                    = "KEGG",
+      "Reactome"                = "Reactome",
+      "WikiPathways"            = "WikiPathways",
+      "Hallmark"                = "Hallmark",
+      "GO - Molecular Function" = "MF",
+      "GO - Biological Process" = "BP",
+      "GO - Cellular Component" = "CC",
+      "KEGG (Mouse)"            = "KEGG (Mouse)",
+      "WikiPathways (Mouse)"    = "WikiPathways (Mouse)"
+    )
+    choices <- if (length(LOADED_GMT_FILES) > 0L) {
+      c(builtin, setNames(names(LOADED_GMT_FILES), names(LOADED_GMT_FILES)))
+    } else {
+      builtin
+    }
+    selectInput("kb_gs_databases", "Databases:", choices = choices,
+                selected = "Hallmark", multiple = TRUE)
+  })
+
+  # --- ORA results store (independent of kb_ora_cache used by heatmap) ---
+  kb_gs_ora_results <- reactiveVal(NULL)
+
+  # Cache: full gene set collections for volcano labeling (multi-db)
+  kb_gs_collection_cache <- reactiveVal(list())
+
+  # --- Run ORA button ---
+  observeEvent(input$kb_gs_run_ora, {
+    req(dep(), input$kb_contrast, input$kb_gs_databases, input$kb_gs_direction)
+    dbs       <- input$kb_gs_databases
+    contrast  <- input$kb_contrast
+    # Checkbox group: c("UP","DOWN") -> "both", single value -> that direction
+    dir_sel   <- input$kb_gs_direction
+    direction <- if (length(dir_sel) == 2L) "both" else dir_sel
+    alpha     <- input$kb_gs_p_cutoff
+    lfc       <- input$kb_gs_lfc_cutoff
+    adj_de    <- input$kb_gs_adjust_de
+
+    t_total <- proc.time()[["elapsed"]]
+    withProgress(message = "Running ORA …", value = 0, {
+      n <- length(dbs)
+      all_res <- lapply(seq_along(dbs), function(i) {
+        incProgress(1 / n, detail = dbs[i])
+        t0 <- proc.time()[["elapsed"]]
+        res <- tryCatch(
+          suppressWarnings(suppressMessages(
+            run_ora_kb_single(dep(), database = dbs[i], contrast = contrast,
+                               direction = direction, alpha = alpha,
+                               log2_threshold = lfc, adjust_alpha = adj_de)
+          )),
+          error = function(e) {
+            showNotification(paste0("ORA failed for ", dbs[i], ": ", e$message),
+                             type = "warning")
+            NULL
+          }
+        )
+        message(sprintf("[ORA] %s done in %.1fs", dbs[i],
+                        proc.time()[["elapsed"]] - t0))
+        res
+      })
+      results <- dplyr::bind_rows(Filter(Negate(is.null), all_res))
+    })
+    message(sprintf("[ORA] Total: %.1fs (%d database(s))",
+                    proc.time()[["elapsed"]] - t_total, length(dbs)))
+
+    kb_gs_ora_results(if (nrow(results) > 0) results else NULL)
+
+    # Load gene set collections for selected databases (for "show all genes" mode)
+    col_cache <- kb_gs_collection_cache()
+    for (db in dbs) {
+      if (!db %in% names(col_cache)) {
+        gs <- if (db %in% names(LOADED_GMT_FILES)) {
+          LOADED_GMT_FILES[[db]]
+        } else {
+          tryCatch(.get_msig_genesets(db), error = function(e) NULL)
+        }
+        if (!is.null(gs)) col_cache[[db]] <- gs
+      }
+    }
+    kb_gs_collection_cache(col_cache)
+    # Clear previous table selection
+    DT::selectRows(kb_gs_table_proxy, NULL)
+  })
+
+  # Table data: ORA results with p-value pre-filtering via numeric inputs;
+  # Direction/Database/Gene Set filtering handled by DT's built-in column filters
+  kb_gs_table_data <- reactive({
+    res          <- kb_gs_ora_results()
+    cur_contrast <- input$kb_contrast
+
+    validate(need(!is.null(res) && nrow(res) > 0,
+      "No ORA results yet \u2014 select databases and click 'Run ORA'."))
+
+    # Filter to the selected contrast (built-in databases return all contrasts)
+    if (!is.null(cur_contrast) && "contrast" %in% colnames(res))
+      res <- dplyr::filter(res, contrast == cur_contrast)
+
+    validate(need(nrow(res) > 0, "No ORA results for this contrast."))
+
+    # Direction as factor for dropdown filter
+    dir_label <- if ("direction" %in% colnames(res)) {
+      factor(ifelse(res$direction == "UP", "\u2191 Up", "\u2193 Down"))
+    } else {
+      factor(rep("", nrow(res)))
+    }
+    # Database as factor for dropdown filter
+    db_label <- if ("var" %in% colnames(res)) factor(res$var) else factor(rep("", nrow(res)))
+
+    # Select and rename columns for display
+    out <- data.frame(
+      Direction           = dir_label,
+      Database            = db_label,
+      `Gene Set`          = if ("Term" %in% colnames(res)) res$Term else res$Description,
+      Overlap             = if ("IN" %in% colnames(res)) res$IN else res$Count,
+      `log2 OR`           = if ("log_odds" %in% colnames(res)) res$log_odds else NA_real_,
+      `p-value`           = if ("p_hyper" %in% colnames(res)) signif(res$p_hyper, 4) else NA_real_,
+      `adj. p-value`      = if ("p.adjust_hyper" %in% colnames(res)) signif(res$p.adjust_hyper, 4) else NA_real_,
+      `Overlapping Genes` = if ("geneID" %in% colnames(res)) res$geneID else NA_character_,
+      check.names         = FALSE,
+      stringsAsFactors    = FALSE
+    )
+    out
+  })
+
+  # Gene set table: multi-row selectable, built-in DT search
+  output$kb_gs_table <- DT::renderDataTable({
+    df <- tryCatch(kb_gs_table_data(), error = function(e) {
+      validate(need(FALSE, conditionMessage(e)))
+    })
+    num_cols <- intersect(c("log2 OR", "p-value", "adj. p-value"), colnames(df))
+    overlap_idx <- which(colnames(df) == "Overlapping Genes") - 1L
+
+    # Pre-fill adj. p-value filter with "0 ... 0.05"
+    adjp_idx <- which(colnames(df) == "adj. p-value")
+    search_cols <- lapply(seq_len(ncol(df)), function(i) {
+      if (i == adjp_idx) list(search = "0 ... 0.05") else list(search = "")
+    })
+
+    DT::datatable(
+      df,
+      selection = list(mode = "multiple", selected = NULL),
+      rownames  = FALSE,
+      filter    = list(position = "top", plain = TRUE),
+      options   = list(
+        pageLength = 10,
+        dom        = "tp",
+        searchCols = search_cols,
+        columnDefs = list(
+          list(
+            targets = overlap_idx,
+            render  = DT::JS("function(data,type,row){
+              if(type==='display'&&data&&data.length>45)
+                return '<span title=\"'+data+'\">'+data.substr(0,45)+'\u2026</span>';
+              return data||'';}")
+          )
+        )
+      )
+    )
+  })
+
+  # Proxy for clearing row selection programmatically
+  kb_gs_table_proxy <- DT::dataTableProxy("kb_gs_table")
+
+  # Limit selection to 2 rows max
+  observeEvent(input$kb_gs_table_rows_selected, {
+    sel <- input$kb_gs_table_rows_selected
+    if (length(sel) > 2L)
+      DT::selectRows(kb_gs_table_proxy, tail(sel, 2L))
+  })
+
+  # Color legend strip showing which color maps to which selected gene set
+  output$kb_gs_color_legend <- renderUI({
+    sel <- input$kb_gs_table_rows_selected
+    if (is.null(sel) || length(sel) == 0L) return(NULL)
+    tbl <- tryCatch(kb_gs_table_data(), error = function(e) NULL)
+    if (is.null(tbl) || !"Gene Set" %in% colnames(tbl)) return(NULL)
+    rows <- head(sel, 2L)
+    set_names <- tbl[["Gene Set"]][rows]
+    dir_labels <- if ("Direction" %in% colnames(tbl)) tbl[["Direction"]][rows] else NULL
+
+    make_swatch <- function(col, label) {
+      tags$span(style = "margin-right:12px; white-space:nowrap;",
+        tags$span(style = paste0(
+          "display:inline-block; width:12px; height:12px; ",
+          "border-radius:2px; margin-right:4px; vertical-align:middle; ",
+          "background-color:", col, ";")),
+        tags$span(style = "font-size:12px; vertical-align:middle;", label)
+      )
+    }
+    shorten <- function(nm) if (nchar(nm) > 40) paste0(substr(nm, 1, 37), "...") else nm
+    add_dir <- function(nm, idx) {
+      dir_tag <- if (!is.null(dir_labels)) paste0(" (", dir_labels[idx], ")") else ""
+      paste0(shorten(nm), dir_tag)
+    }
+
+    if (length(rows) == 1L) {
+      items <- list(make_swatch(KB_GS_COLORS[1], add_dir(set_names[1], 1)))
+    } else {
+      # Two sets: show A-only, B-only, overlap
+      items <- list(
+        make_swatch(KB_GS_COLORS[1], paste0(add_dir(set_names[1], 1), " only")),
+        make_swatch(KB_GS_COLORS[2], paste0(add_dir(set_names[2], 2), " only")),
+        make_swatch(KB_GS_COLORS[3], "Overlap")
+      )
+    }
+    tags$div(style = "padding: 4px 0 6px 0; line-height: 1.8;", items)
+  })
+
+  # ===========================================================================
+  # PTM-SEA (site-level enrichment via ssGSEA2 + PTMsigDB)
+  # ===========================================================================
+
+  kb_ptm_results <- reactiveVal(NULL)
+  kb_ptm_start_time <- reactiveVal(NULL)
+
+  # ExtendedTask — runs PTM-SEA in a background R process so the UI stays
+  # responsive.  Invoked via $invoke() and result collected via $result().
+  ptmsea_task <- ExtendedTask$new(function(dep_snapshot, species, mod_type,
+                                           nperm, min_size, subsets) {
+    future::future({
+      run_ptmsea_all(dep_snapshot, species = species, mod_type = mod_type,
+                     nperm = nperm, min_size = min_size, subsets = subsets)
+    }, seed = TRUE)
+  })
+
+  # Launch button — snapshot inputs and kick off the background task
+  observeEvent(input$kb_ptm_run_sea, {
+    req(dep())
+    is_site <- metadata(dep())$level == "site" ||
+               input$exp %in% c("TMT-site", "DIA-site")
+    validate(need(is_site, "PTM-SEA requires site-level data."))
+    validate(need("SequenceWindow" %in% colnames(SummarizedExperiment::rowData(dep())),
+                  "SequenceWindow column missing from site data."))
+
+    # Snapshot all inputs before launching (background process can't access reactives)
+    dep_snapshot <- dep()
+    species  <- input$kb_ptm_species %||% "human"
+    mod_type <- input$kb_ptm_mod_type %||% "p"
+    nperm    <- input$kb_ptm_nperm %||% 1000L
+    min_size <- input$kb_ptm_min_size %||% 5L
+    subsets  <- input$kb_ptm_subsets %||% c("PERT", "PATH", "DISEASE", "KINASE")
+
+    kb_ptm_start_time(proc.time()[["elapsed"]])
+    shinyjs::disable("kb_ptm_run_sea")
+    ptmsea_task$invoke(dep_snapshot, species, mod_type, nperm, min_size, subsets)
+    showNotification("PTM-SEA started in background. You can continue using the app.",
+                     type = "message", duration = 5)
+  })
+
+  # Status indicator next to the Run button
+  output$kb_ptm_status <- renderUI({
+    status <- ptmsea_task$status()
+    if (status == "running") {
+      tags$span(style = "margin-left:10px; color:#e67e22; font-size:13px;",
+        icon("spinner", class = "fa-spin"),
+        "Running..."
+      )
+    } else if (status == "error") {
+      tags$span(style = "margin-left:10px; color:#e74c3c; font-size:13px;",
+        icon("exclamation-triangle"),
+        "Error"
+      )
+    } else if (!is.null(kb_ptm_results())) {
+      tags$span(style = "margin-left:10px; color:#27ae60; font-size:13px;",
+        icon("check"),
+        "Done"
+      )
+    } else {
+      NULL
+    }
+  })
+
+  # Collect result or handle error when the background task finishes
+  observe({
+    status <- ptmsea_task$status()
+    req(status %in% c("success", "error"))
+
+    t_start <- kb_ptm_start_time()
+    if (!is.null(t_start)) {
+      elapsed <- proc.time()[["elapsed"]] - t_start
+      message(sprintf("[PTM-SEA] Total: %.1fs", elapsed))
+      kb_ptm_start_time(NULL)
+    }
+
+    shinyjs::enable("kb_ptm_run_sea")
+
+    if (status == "success") {
+      result <- tryCatch(ptmsea_task$result(), error = function(e) NULL)
+      kb_ptm_results(result)
+      DT::selectRows(kb_ptm_table_proxy, NULL)
+      showNotification("PTM-SEA completed!", type = "message", duration = 5)
+    } else {
+      # status == "error": result() will re-throw, so catch and display
+      err_msg <- tryCatch({
+        ptmsea_task$result()
+        "Unknown error"
+      }, error = function(e) e$message)
+      showNotification(paste0("PTM-SEA error: ", err_msg),
+                       type = "error", duration = 8)
+    }
+  })
+
+  # PTM-SEA table data
+  kb_ptm_table_data <- reactive({
+    res          <- kb_ptm_results()
+    cur_contrast <- input$kb_contrast
+
+    validate(need(!is.null(res) && nrow(res) > 0,
+      "No PTM-SEA results yet \u2014 click 'Run PTM-SEA'."))
+
+    # Filter to the selected contrast
+    if (!is.null(cur_contrast) && "contrast" %in% colnames(res))
+      res <- dplyr::filter(res, contrast == cur_contrast)
+
+    validate(need(nrow(res) > 0, "No PTM-SEA results for this contrast."))
+
+    # Extract signature category from set name prefix (e.g. "KINASE-..." → "Kinase")
+    category <- dplyr::case_when(
+      grepl("^KINASE-",  res$set) ~ "Kinase",
+      grepl("^PATH-",    res$set) ~ "Pathway",
+      grepl("^PERT-",    res$set) ~ "Perturbation",
+      grepl("^DISEASE-", res$set) ~ "Disease",
+      TRUE                        ~ "Other"
+    )
+
+    data.frame(
+      Category       = factor(category),
+      `Set Name`     = res$set,
+      `Set Size`     = res$set_size,
+      ES             = round(res$ES, 4),
+      NES            = round(res$NES, 4),
+      `p-value`      = signif(res$p_value, 4),
+      `adj. p-value` = signif(res$adj_p_value, 4),
+      check.names    = FALSE,
+      stringsAsFactors = FALSE
+    )
+  })
+
+  # PTM-SEA DT table (single-select)
+  output$kb_ptm_table <- DT::renderDataTable({
+    df <- tryCatch(kb_ptm_table_data(), error = function(e) {
+      validate(need(FALSE, conditionMessage(e)))
+    })
+    num_cols <- intersect(c("ES", "NES", "p-value", "adj. p-value"), colnames(df))
+
+    # Pre-fill adj. p-value filter with "0 ... 0.05"
+    adjp_idx <- which(colnames(df) == "adj. p-value")
+    search_cols <- lapply(seq_len(ncol(df)), function(i) {
+      if (i == adjp_idx) list(search = "0 ... 0.05") else list(search = "")
+    })
+
+    DT::datatable(
+      df,
+      selection = list(mode = "single", selected = NULL),
+      rownames  = FALSE,
+      filter    = list(position = "top", plain = TRUE),
+      options   = list(
+        pageLength = 10,
+        dom        = "tp",
+        searchCols = search_cols
+      )
+    )
+  })
+
+  kb_ptm_table_proxy <- DT::dataTableProxy("kb_ptm_table")
+
+  # PTM-SEA color legend (expected up = red, expected down = blue)
+  output$kb_ptm_color_legend <- renderUI({
+    sel <- input$kb_ptm_table_rows_selected
+    if (is.null(sel) || length(sel) == 0L) return(NULL)
+    tbl <- tryCatch(kb_ptm_table_data(), error = function(e) NULL)
+    if (is.null(tbl)) return(NULL)
+    set_name <- tbl[["Set Name"]][sel]
+
+    make_swatch <- function(col, label) {
+      tags$span(style = "margin-right:14px; white-space:nowrap;",
+        tags$span(style = paste0(
+          "display:inline-block; width:12px; height:12px; ",
+          "border-radius:2px; margin-right:4px; vertical-align:middle; ",
+          "background-color:", col, ";")),
+        tags$span(style = "font-size:12px; vertical-align:middle;", label)
+      )
+    }
+    tags$div(style = "padding:4px 0 6px 0; line-height:1.8;",
+      make_swatch("#e74c3c", paste0(set_name, " (expected up)")),
+      make_swatch("#3498db", paste0(set_name, " (expected down)"))
+    )
+  })
+
+  # ===========================================================================
+  # Kinase Activity Inference (decoupleR z-score)
+  # ===========================================================================
+
+  kb_ka_results <- reactiveVal(NULL)
+
+  # Load curated KS library once
+  kb_ka_library <- local({
+    path <- file.path("data", "gene_sets", "curated_library.csv")
+    if (file.exists(path)) {
+      df <- read.csv(path, stringsAsFactors = FALSE)
+      # Filter out rows without flanking sequence
+      df <- df[!is.na(df$sequence) & nchar(trimws(df$sequence)) > 2, ]
+      df
+    } else {
+      NULL
+    }
+  })
+
+  observeEvent(input$kb_ka_run, {
+    req(dep())
+    is_site <- metadata(dep())$level == "site" ||
+               input$exp %in% c("TMT-site", "DIA-site")
+    validate(need(is_site, "Kinase Activity requires site-level data."))
+    validate(need("SequenceWindow" %in% colnames(SummarizedExperiment::rowData(dep())),
+                  "SequenceWindow column missing from site data."))
+    validate(need(!is.null(kb_ka_library),
+                  "Curated KS library not found (data/gene_sets/curated_library.csv)."))
+
+    min_targets <- input$kb_ka_min_targets %||% 3L
+
+    withProgress(message = "Running Kinase Activity inference ...", value = 0.3, {
+      result <- tryCatch(
+        run_kinase_activity(dep(), ks_library = kb_ka_library,
+                            min_targets = min_targets),
+        error = function(e) {
+          showNotification(paste0("Kinase Activity error: ", e$message),
+                           type = "error", duration = 8)
+          NULL
+        }
+      )
+      incProgress(0.7)
+    })
+
+    kb_ka_results(result)
+  })
+
+  # Kinase Activity table data
+  kb_ka_table_data <- reactive({
+    res <- kb_ka_results()
+    cur_contrast <- input$kb_contrast
+
+    validate(need(!is.null(res) && nrow(res) > 0,
+      "No Kinase Activity results yet \u2014 click 'Run Kinase Activity'."))
+
+    if (!is.null(cur_contrast) && "contrast" %in% colnames(res))
+      res <- dplyr::filter(res, contrast == cur_contrast)
+
+    validate(need(nrow(res) > 0, "No results for this contrast."))
+
+    data.frame(
+      Kinase           = res$kinase,
+      `Substrates`     = res$n_substrates,
+      `Z-score`        = round(res$score, 4),
+      `p-value`        = signif(res$p_value, 4),
+      `adj. p-value`   = signif(res$adj_p_value, 4),
+      check.names      = FALSE,
+      stringsAsFactors  = FALSE
+    )
+  })
+
+  # Kinase Activity DT table (single-select)
+  output$kb_ka_table <- DT::renderDataTable({
+    df <- tryCatch(kb_ka_table_data(), error = function(e) {
+      validate(need(FALSE, conditionMessage(e)))
+    })
+
+    adjp_idx <- which(colnames(df) == "adj. p-value")
+    search_cols <- lapply(seq_len(ncol(df)), function(i) {
+      if (i == adjp_idx) list(search = "0 ... 0.05") else list(search = "")
+    })
+
+    DT::datatable(
+      df,
+      selection = list(mode = "single", selected = NULL),
+      rownames  = FALSE,
+      filter    = list(position = "top", plain = TRUE),
+      options   = list(
+        pageLength = 10,
+        dom        = "tp",
+        searchCols = search_cols
+      )
+    )
+  })
+
+  kb_ka_table_proxy <- DT::dataTableProxy("kb_ka_table")
+
+  # ===========================================================================
+  # VOLCANO (multi-set gene highlighting from table row selection)
+  # ===========================================================================
+
+  kb_volcano_input <- reactive({
+    req(dep(), input$kb_contrast)
+
+    # Access all reactive inputs upfront so Shiny registers them as
+    # dependencies regardless of which branch executes below.
+    selected_rows <- input$kb_gs_table_rows_selected
+    ptm_sel       <- input$kb_ptm_table_rows_selected
+    ka_sel        <- input$kb_ka_table_rows_selected
+    active_tab    <- input$kb_gs_tabset
+
+    gene_set_list <- NULL
+    ptm_colors    <- NULL
+
+    if (identical(active_tab, "Kinase Activity") &&
+        !is.null(ka_sel) && length(ka_sel) == 1L) {
+      # --- Kinase Activity volcano overlay (site-level, single-select) ---
+      ka_tbl <- tryCatch(kb_ka_table_data(), error = function(e) NULL)
+      if (!is.null(ka_tbl) && nrow(ka_tbl) >= ka_sel && !is.null(kb_ka_library)) {
+        kinase_name <- ka_tbl[["Kinase"]][ka_sel]
+
+        # Look up substrates from curated library by flanking sequence
+        lib_seqs <- toupper(trimws(
+          kb_ka_library$sequence[kb_ka_library$source == kinase_name]
+        ))
+        lib_seqs <- lib_seqs[!is.na(lib_seqs) & nchar(lib_seqs) > 0L]
+
+        if (length(lib_seqs) > 0L) {
+          rd        <- as.data.frame(SummarizedExperiment::rowData(dep()))
+          sw_upper  <- toupper(trimws(rd$SequenceWindow))
+          matched   <- which(sw_upper %in% lib_seqs)
+
+          if (length(matched) > 0L) {
+            exp_type  <- metadata(dep())$exp
+            lvl_type  <- metadata(dep())$level
+            show_gene <- isTRUE(input$kb_show_gene)
+
+            volcano_names <- if (!show_gene) {
+              rd$Index
+            } else if (exp_type == "TMT" && lvl_type == "site") {
+              paste0(rd$Gene, "_", gsub(".*_", "", rd$ID))
+            } else if (exp_type == "TMT") {
+              paste0(rd$Gene, "_", rd$Peptide)
+            } else if (exp_type == "DIA" && lvl_type == "site") {
+              paste0(rd$Gene, "_", gsub(".*_", "", rd$ID))
+            } else if (exp_type == "DIA") {
+              if ("Gene" %in% colnames(rd))
+                paste0(rd$Gene, "_", rd$Peptide)
+              else
+                paste0(rd$Genes, "_", rd$Stripped.Sequence)
+            } else {
+              rd$Index
+            }
+
+            sub_names <- unique(volcano_names[matched])
+            gene_set_list <- setNames(list(sub_names), paste0(kinase_name, " substrates"))
+            ptm_colors    <- "#e74c3c"  # red, same as PTM-SEA expected-up
+          }
+        }
+      }
+
+    } else if (identical(active_tab, "PTM-SEA") &&
+        !is.null(ptm_sel) && length(ptm_sel) == 1L) {
+      # --- PTM-SEA volcano overlay (site-level, single-select) ---
+      ptm_tbl <- tryCatch(kb_ptm_table_data(), error = function(e) NULL)
+      if (!is.null(ptm_tbl) && nrow(ptm_tbl) >= ptm_sel) {
+        set_name <- ptm_tbl[["Set Name"]][ptm_sel]
+        species  <- input$kb_ptm_species %||% "human"
+        gmt_path <- get_ptmsigdb_path(species)
+
+        if (file.exists(gmt_path)) {
+          # Use the app's own read_gmt to preserve ;u/;d suffixes
+          gmt      <- read_gmt(gmt_path)
+          mod_type <- input$kb_ptm_mod_type %||% "p"
+          parsed   <- parse_ptmsea_set_sites(gmt, set_name, mod_type = mod_type)
+          rd     <- as.data.frame(SummarizedExperiment::rowData(dep()))
+
+          # Build volcano name for each row — must replicate the exact same
+          # branching logic used in plot_volcano_customized so labels match.
+          exp_type  <- metadata(dep())$exp
+          lvl_type  <- metadata(dep())$level
+          show_gene <- isTRUE(input$kb_show_gene)
+
+          if (!show_gene) {
+            # show_gene=FALSE: TMT peptide/site and DIA site/peptide all use Index
+            volcano_names <- rd$Index
+          } else if (exp_type == "TMT") {
+            if (lvl_type == "site") {
+              volcano_names <- paste0(rd$Gene, "_", gsub(".*_", "", rd$ID))
+            } else {
+              # TMT-site stores level="peptide" (known bug) — volcano uses Gene_Peptide
+              volcano_names <- paste0(rd$Gene, "_", rd$Peptide)
+            }
+          } else if (exp_type == "DIA") {
+            if (lvl_type == "site") {
+              volcano_names <- paste0(rd$Gene, "_", gsub(".*_", "", rd$ID))
+            } else {
+              if ("Gene" %in% colnames(rd))
+                volcano_names <- paste0(rd$Gene, "_", rd$Peptide)
+              else
+                volcano_names <- paste0(rd$Genes, "_", rd$Stripped.Sequence)
+            }
+          } else {
+            # LFQ or other — fallback
+            volcano_names <- rd$Index
+          }
+
+          # Map flanking sequences back to volcano names via SequenceWindow
+          sw_upper <- toupper(trimws(rd$SequenceWindow))
+          map_flanking_to_names <- function(flanking_seqs) {
+            if (length(flanking_seqs) == 0L) return(character(0L))
+            matched <- which(sw_upper %in% flanking_seqs)
+            if (length(matched) == 0L) return(character(0L))
+            unique(volcano_names[matched])
+          }
+
+          up_names   <- map_flanking_to_names(parsed$up)
+          down_names <- map_flanking_to_names(parsed$down)
+
+          gene_set_list <- list()
+          if (length(up_names) > 0L)
+            gene_set_list[[paste0(set_name, " (expected up)")]] <- up_names
+          if (length(down_names) > 0L)
+            gene_set_list[[paste0(set_name, " (expected down)")]] <- down_names
+
+          gene_set_list <- Filter(function(x) length(x) > 0L, gene_set_list)
+          if (length(gene_set_list) == 0L) {
+            gene_set_list <- NULL
+          } else {
+            # Red for expected-up, blue for expected-down
+            ptm_colors <- c("#e74c3c", "#3498db")[seq_along(gene_set_list)]
+          }
+        }
+      }
+
+    } else if (!is.null(selected_rows) && length(selected_rows) > 0L) {
+      # --- Gene-level ORA volcano overlay (max 2 sets) ---
+      rows      <- head(selected_rows, 2L)
+      tbl       <- tryCatch(kb_gs_table_data(), error = function(e) NULL)
+      col_cache <- kb_gs_collection_cache()
+      show_all  <- TRUE
+
+      if (!is.null(tbl) && "Gene Set" %in% colnames(tbl)) {
+        set_names_sel <- tbl[["Gene Set"]][rows]
+        overlap_genes <- if ("Overlapping Genes" %in% colnames(tbl))
+          tbl[["Overlapping Genes"]][rows] else rep(NA_character_, length(rows))
+        dir_labels <- if ("Direction" %in% colnames(tbl))
+          tbl[["Direction"]][rows] else rep("", length(rows))
+        legend_labels <- ifelse(dir_labels != "",
+          paste0(set_names_sel, " (", dir_labels, ")"),
+          set_names_sel)
+
+        # Build a reverse lookup (only when "show all genes" is checked)
+        .clean_name <- function(x) tolower(gsub("_", " ", gsub(
+          "^HALLMARK_|^KEGG_|^REACTOME_|^WP_|^GOBP_|^GOMF_|^GOCC_", "", x)))
+        rev_lookup <- list()
+        if (show_all && length(col_cache) > 0L) {
+          for (db_data in col_cache) {
+            for (k in names(db_data)) {
+              rev_lookup[[.clean_name(k)]] <- db_data[[k]]
+              rev_lookup[[tolower(k)]] <- db_data[[k]]
+            }
+          }
+        }
+
+        # Resolve gene symbols for each selected set
+        raw_gene_symbols <- lapply(seq_along(set_names_sel), function(i) {
+          nm <- set_names_sel[i]
+          genes <- NULL
+          if (show_all) {
+            key <- tolower(nm)
+            genes <- rev_lookup[[key]]
+            if (is.null(genes)) genes <- rev_lookup[[.clean_name(nm)]]
+          }
+          if (is.null(genes) || length(genes) == 0L) {
+            gid <- overlap_genes[i]
+            if (!is.na(gid) && nchar(gid) > 0L)
+              genes <- strsplit(gid, "/")[[1]]
+          }
+          if (is.null(genes)) character(0L) else genes
+        })
+
+        # For site/peptide-level data, ORA returns gene symbols but the volcano
+        # plot uses site-level names (e.g. "AKT1_S473" or Index). Map gene
+        # symbols to the actual volcano labels via the Gene column in rowData.
+        rd       <- as.data.frame(SummarizedExperiment::rowData(dep()))
+        exp_type <- metadata(dep())$exp
+        lvl_type <- metadata(dep())$level
+        is_site_or_peptide <- lvl_type %in% c("site", "peptide")
+        show_gene <- isTRUE(input$kb_show_gene)
+
+        .gene_to_volcano_names <- function(gene_syms) {
+          if (!is_site_or_peptide || length(gene_syms) == 0L) return(gene_syms)
+          # Find rows whose Gene matches the ORA gene symbols
+          matched <- which(rd$Gene %in% gene_syms)
+          if (length(matched) == 0L) return(gene_syms)
+          # Build the same volcano name as plot_volcano_customized
+          if (!show_gene) {
+            unique(rd$Index[matched])
+          } else if (exp_type == "TMT" && lvl_type == "site") {
+            unique(paste0(rd$Gene[matched], "_", gsub(".*_", "", rd$ID[matched])))
+          } else if (exp_type == "TMT") {
+            unique(paste0(rd$Gene[matched], "_", rd$Peptide[matched]))
+          } else if (exp_type == "DIA" && lvl_type == "site") {
+            unique(paste0(rd$Gene[matched], "_", gsub(".*_", "", rd$ID[matched])))
+          } else if (exp_type == "DIA") {
+            if ("Gene" %in% colnames(rd))
+              unique(paste0(rd$Gene[matched], "_", rd$Peptide[matched]))
+            else
+              unique(paste0(rd$Genes[matched], "_", rd$Stripped.Sequence[matched]))
+          } else {
+            gene_syms
+          }
+        }
+
+        raw_genes <- lapply(raw_gene_symbols, .gene_to_volcano_names)
+
+        if (length(rows) == 1L) {
+          # Single set: simple coloring
+          gene_set_list <- setNames(raw_genes, legend_labels)
+        } else {
+          # Two sets: split into A-only, B-only, overlap
+          genes_a <- raw_genes[[1]]
+          genes_b <- raw_genes[[2]]
+          shared  <- intersect(genes_a, genes_b)
+          only_a  <- setdiff(genes_a, shared)
+          only_b  <- setdiff(genes_b, shared)
+          shorten <- function(nm) if (nchar(nm) > 35) paste0(substr(nm, 1, 32), "...") else nm
+          gene_set_list <- list()
+          if (length(only_a) > 0L)
+            gene_set_list[[paste0(shorten(legend_labels[1]), " only")]] <- only_a
+          if (length(only_b) > 0L)
+            gene_set_list[[paste0(shorten(legend_labels[2]), " only")]] <- only_b
+          if (length(shared) > 0L)
+            gene_set_list[["Overlap"]] <- shared
+        }
+        gene_set_list <- Filter(function(x) length(x) > 0L, gene_set_list)
+        if (length(gene_set_list) == 0L) gene_set_list <- NULL
+      }
+    }
+
+    plot_volcano_customized(
+      dep(),
+      contrast        = input$kb_contrast,
+      label_size      = input$kb_fontsize,
+      add_names       = input$kb_check_names,
+      adjusted        = input$kb_p_adj,
+      lfc             = input$kb_lfc,
+      alpha           = input$kb_alpha,
+      show_gene       = input$kb_show_gene,
+      gene_set_list   = gene_set_list,
+      gene_set_colors = if (!is.null(ptm_colors)) ptm_colors
+        else if (!is.null(gene_set_list)) KB_GS_COLORS[seq_along(gene_set_list)]
+        else NULL
+    )
+  })
+
+  # ===========================================================================
+  # ORA PATHWAY HEATMAP  (rows = terms, cols = contrasts)
+  # Uses results from Gene Set Explorer (kb_gs_ora_results) — no independent
+
+  # computation.  Users should run ORA in the Gene Set Explorer first.
+  # ===========================================================================
+
+  # Database selector: only show databases that have results from Gene Set Explorer
+  output$kb_ora_database_ui <- renderUI({
+    res <- kb_gs_ora_results()
+    if (is.null(res) || !"var" %in% colnames(res)) {
+      return(tags$p(style = "color:#888; margin-top:8px;",
+                    icon("info-circle"),
+                    " Run ORA in Gene Set Explorer first."))
+    }
+    available_dbs <- unique(res$var)
+    choices <- setNames(available_dbs, available_dbs)
+    selectInput("kb_ora_database", "Pathway database:", choices = choices,
+                selected = choices[1])
+  })
+
+  # Status badge: shows which databases are available from Gene Set Explorer
+  output$kb_ora_status_ui <- renderUI({
+    res <- kb_gs_ora_results()
+    if (is.null(res) || !"var" %in% colnames(res)) {
+      tags$p(style = "color:#888; margin-top:4px;",
+             icon("info-circle"),
+             " No ORA results. Run ORA in Gene Set Explorer first.")
+    } else {
+      dbs <- unique(res$var)
+      tags$p(style = "color:#27ae60; margin-top:4px;",
+             icon("check-circle"),
+             paste0(length(dbs), " database(s) available: ",
+                    paste(dbs, collapse = ", ")))
+    }
+  })
+
+  # Control condition selector (only shown when "control-related only" is checked)
+  output$kb_ora_control_ui <- renderUI({
+    req(dep(), isTRUE(input$kb_ora_ctrl_only))
+    cd <- as.data.frame(SummarizedExperiment::colData(dep()))
+    cond_col <- if ("condition" %in% colnames(cd)) "condition" else colnames(cd)[1]
+    conds <- sort(unique(as.character(cd[[cond_col]])))
+    selectInput("kb_ora_control", "Control condition:", choices = conds)
+  })
+
+  # Heatmap UI: dynamic height based on number of significant terms
+  output$kb_ora_heatmap_ui <- renderUI({
+    res <- kb_gs_ora_results()
+    db  <- input$kb_ora_database
+    if (is.null(db) || is.null(res) || !"var" %in% colnames(res)) return(NULL)
+    if (!db %in% unique(res$var)) return(NULL)
+    # Estimate row count for dynamic height
+    db_res   <- dplyr::filter(res, var == db)
+    use_adjp <- isTRUE(input$kb_ora_use_adjp)
+    p_col    <- if (use_adjp && "p.adjust_hyper" %in% colnames(db_res))
+      "p.adjust_hyper" else "p_hyper"
+    alpha    <- if (!is.null(input$kb_ora_alpha)) input$kb_ora_alpha else 0.05
+    n_terms  <- length(unique(db_res$Term[db_res[[p_col]] < alpha]))
+    hm_height <- max(300, min(n_terms * 16 + 80, 2000))
+    shinycssloaders::withSpinner(
+      plotOutput("kb_ora_heatmap", height = hm_height), color = "#3c8dbc")
+  })
+
+  # Heatmap plot: reads from Gene Set Explorer results
+  output$kb_ora_heatmap <- renderPlot({
+    res <- kb_gs_ora_results()
+    req(res, input$kb_ora_database)
+
+    ora_res <- dplyr::filter(res, var == input$kb_ora_database)
+    validate(need(nrow(ora_res) > 0,
+                  "No ORA results for this database. Run ORA in Gene Set Explorer first."))
+
+    # Filter to control-related contrasts if checkbox is checked
+    if (isTRUE(input$kb_ora_ctrl_only) && !is.null(input$kb_ora_control) &&
+        "contrast" %in% colnames(ora_res)) {
+      ctrl <- input$kb_ora_control
+      ora_res <- dplyr::filter(ora_res,
+                               grepl(paste0("_vs_", ctrl, "$"), contrast) |
+                               grepl(paste0("^", ctrl, "_vs_"), contrast))
+    }
+
+    validate(need(nrow(ora_res) > 0,
+                  "No results after filtering contrasts. Adjust the control condition."))
+
+    use_adjp <- isTRUE(input$kb_ora_use_adjp)
+    tryCatch({
+      hm <- plot_ora_heatmap(
+        ora_results = ora_res,
+        value_type  = input$kb_ora_value_type,
+        alpha       = input$kb_ora_alpha,
+        use_adjp    = use_adjp
+      )
+      ComplexHeatmap::draw(hm)
+    }, error = function(e) {
+      ggplot2::ggplot() +
+        ggplot2::annotate("text", x = 0.5, y = 0.5, size = 5,
+                          label = paste0("ORA heatmap error:\n", e$message)) +
+        ggplot2::theme_void()
+    })
+  })
+
+  # ===========================================================================
+  # NETWORK ANALYSIS
+  # ===========================================================================
+
+  # Stored network objects for HTML download
+  kb_ppi_net_stored       <- reactiveVal(NULL)
+  kb_multi_ppi_net_stored <- reactiveVal(NULL)
+  kb_ks_net_stored        <- reactiveVal(NULL)
+
+  output$kb_dl_ppi_net <- downloadHandler(
+    filename = function() "ppi_network.html",
+    content  = function(file) {
+      net <- kb_ppi_net_stored()
+      validate(need(!is.null(net), "Build the PPI network first."))
+      htmlwidgets::saveWidget(net, file, selfcontained = TRUE)
+    }
+  )
+
+  output$kb_dl_multi_ppi_net <- downloadHandler(
+    filename = function() "multi_bait_ppi_network.html",
+    content  = function(file) {
+      net <- kb_multi_ppi_net_stored()
+      validate(need(!is.null(net), "Build the Multi-bait PPI network first."))
+      htmlwidgets::saveWidget(net, file, selfcontained = TRUE)
+    }
+  )
+
+  output$kb_dl_ks_net <- downloadHandler(
+    filename = function() "kinase_substrate_network.html",
+    content  = function(file) {
+      net <- kb_ks_net_stored()
+      validate(need(!is.null(net), "Build the Kinase-Substrate network first."))
+      htmlwidgets::saveWidget(net, file, selfcontained = TRUE)
+    }
+  )
+
+  # --- PPI network output ---
+  output$kb_ppi_ui <- renderUI({
+    req(input$kb_run_ppi)
+    shinycssloaders::withSpinner(
+      visNetwork::visNetworkOutput("kb_ppi_network", height = "420px"),
+      color = "#3c8dbc")
+  })
+
+  observeEvent(input$kb_run_ppi, {
+    result <- plot_ppi_network(
+      dep           = dep(),
+      contrast      = input$kb_contrast,
+      lfc_threshold = input$kb_ppi_lfc,
+      alpha         = input$kb_ppi_alpha,
+      string_score  = input$kb_ppi_score,
+      species_id    = as.integer(input$kb_ppi_species %||% "9606"),
+      use_adjp      = isTRUE(input$kb_ppi_use_adjp),
+      bait_connected_only = isTRUE(input$kb_ppi_bait_only)
+    )
+    kb_ppi_net_stored(result$network)
+    output$kb_ppi_network <- visNetwork::renderVisNetwork({ result$network })
+    output$kb_ppi_legend_ui <- renderUI({
+      ppi_legend_html(
+        max_fc    = result$meta$max_fc,
+        score_min = result$meta$score_min,
+        p_min     = result$meta$p_min,
+        p_max     = result$meta$p_max
+      )
+    })
+  })
+
+  # --- Multi-bait PPI network ---
+  output$kb_multi_contrasts_ui <- renderUI({
+    req(dep())
+    rd            <- as.data.frame(SummarizedExperiment::rowData(dep()))
+    all_contrasts <- gsub("_significant$", "",
+                          grep("_significant$", colnames(rd), value = TRUE))
+    checkboxGroupInput("kb_multi_contrasts", "Comparisons (select 2+):",
+                       choices = all_contrasts, selected = all_contrasts)
+  })
+
+  output$kb_multi_ppi_ui <- renderUI({
+    req(input$kb_run_multi_ppi)
+    shinycssloaders::withSpinner(
+      visNetwork::visNetworkOutput("kb_multi_ppi_network", height = "500px"),
+      color = "#3c8dbc")
+  })
+
+  observeEvent(input$kb_run_multi_ppi, {
+    req(input$kb_multi_contrasts)
+    validate(need(length(input$kb_multi_contrasts) >= 2,
+                  "Select at least 2 bait contrasts."))
+    result <- plot_ppi_network_multi(
+      dep                = dep(),
+      contrasts          = input$kb_multi_contrasts,
+      lfc_threshold      = input$kb_multi_lfc,
+      alpha              = input$kb_multi_alpha,
+      string_score       = input$kb_multi_score,
+      species_id         = as.integer(input$kb_multi_species %||% "9606"),
+      use_adjp           = isTRUE(input$kb_multi_use_adjp),
+      bait_connected_only = isTRUE(input$kb_multi_bait_only)
+    )
+    kb_multi_ppi_net_stored(result$network)
+    output$kb_multi_ppi_network <- visNetwork::renderVisNetwork({ result$network })
+    output$kb_multi_legend_ui <- renderUI({
+      bait_palette <- c("#e74c3c", "#3498db", "#2ecc71", "#f39c12",
+                        "#9b59b6", "#1abc9c", "#e67e22", "#34495e")
+      bait_names <- gsub("_vs_.*", "", input$kb_multi_contrasts)
+      bait_colors <- bait_palette[seq_along(bait_names)]
+      ppi_multi_legend_html(
+        bait_names = bait_names,
+        bait_colors = bait_colors,
+        score_min   = result$meta$score_min,
+        p_min       = result$meta$p_min,
+        p_max       = result$meta$p_max
+      )
+    })
+  })
+
+  # --- Kinase-Substrate network ---
+  # Swap score cutoff default when source changes (NES=5 for PTM-SEA, Z=2 for Z-score)
+  observeEvent(input$kb_ks_source, {
+    if (!is.null(input$kb_ks_source)) {
+      default_cutoff <- if (input$kb_ks_source == "zscore") 2 else 5
+      updateNumericInput(session, "kb_ks_nes_cutoff", value = default_cutoff)
+    }
+  }, ignoreInit = TRUE)
+
+  output$kb_ks_net_ui <- renderUI({
+    req(input$kb_run_ks_net)
+    shinycssloaders::withSpinner(
+      visNetwork::visNetworkOutput("kb_ks_network", height = "500px"),
+      color = "#3c8dbc")
+  })
+
+  observeEvent(input$kb_run_ks_net, {
+    ks_source <- input$kb_ks_source %||% "ptmsea"
+
+    if (ks_source == "zscore") {
+      ka_res <- kb_ka_results()
+      if (is.null(ka_res) || nrow(ka_res) == 0) {
+        showNotification("Run Kinase Activity inference first in the Gene Set Explorer tab.",
+                         type = "warning", duration = 5)
+        return()
+      }
+      kinase_data <- ka_res
+    } else {
+      ptm_res <- kb_ptm_results()
+      if (is.null(ptm_res) || nrow(ptm_res) == 0) {
+        showNotification("Run PTM-SEA first in the Gene Set Explorer tab.",
+                         type = "warning", duration = 5)
+        return()
+      }
+      kinase_data <- ptm_res
+    }
+
+    result <- tryCatch(
+      withProgress(message = "Building kinase-substrate network...", value = 0.3, {
+        res <- plot_kinase_substrate_network(
+          ptmsea_results  = kinase_data,
+          dep             = dep(),
+          contrast        = input$kb_contrast,
+          species         = input$kb_ptm_species %||% "human",
+          mod_type        = input$kb_ptm_mod_type %||% "p",
+          nes_cutoff      = input$kb_ks_nes_cutoff %||% 1.5,
+          p_cutoff        = input$kb_ks_p_cutoff %||% 0.05,
+          use_adjp        = isTRUE(input$kb_ks_use_adjp),
+          site_lfc_cutoff = input$kb_ks_site_lfc %||% 0,
+          site_p_cutoff   = input$kb_ks_site_p %||% 1,
+          site_use_adjp   = isTRUE(input$kb_ks_site_use_adjp),
+          hide_empty_kinases = isTRUE(input$kb_ks_hide_empty),
+          source_type     = ks_source,
+          ks_library      = if (ks_source == "zscore") kb_ka_library else NULL
+        )
+        incProgress(0.7)
+        res
+      }),
+      error = function(e) {
+        showNotification(paste0("KS network error: ", e$message),
+                         type = "error", duration = 8)
+        NULL
+      }
+    )
+
+    if (is.null(result)) return()
+
+    kb_ks_net_stored(result$network)
+    output$kb_ks_network <- visNetwork::renderVisNetwork({ result$network })
+    output$kb_ks_legend_ui <- renderUI({
+      kinase_substrate_legend_html(
+        max_nes     = result$meta$max_nes,
+        score_label = result$meta$score_label %||% "NES"
+      )
+    })
+  })
+
 }

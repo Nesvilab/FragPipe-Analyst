@@ -823,11 +823,374 @@ ui <- function(request){shinyUI(
                    ) # Venn plot column closed
                  ) # fuildRow closed
               )  # occurrence panel closed
+            ,
+            # ============================================================
+            ## KNOWLEDGE BASED ANALYSIS panel
+            # ============================================================
+            tabPanel("Knowledge Based Analysis",
+                     value = "kb_panel",
+                     br(),
+
+              # --- Row 1: Volcano + Gene Set Explorer ---
+              fluidRow(
+                box(title = "Volcano Plot", width = 6,
+                  # Volcano controls
+                  fluidRow(
+                    column(6, uiOutput("kb_contrast_selector")),
+                    column(3, numericInput("kb_fontsize", "Font size",
+                                          min = 0, max = 8, value = 4)),
+                    column(3,
+                      shinyWidgets::dropdownButton(
+                        circle = TRUE, status = "default", right = TRUE,
+                        icon   = icon("gear"), width = "260px",
+                        numericInput("kb_lfc",   "LFC cutoff",
+                                     min = 0, max = 10, value = 1, step = 0.5),
+                        numericInput("kb_alpha", "p-value cutoff",
+                                     min = 0, max = 1,  value = 0.05, step = 0.01),
+                        tooltip = tooltipOptions(placement = "left",
+                                                 title = "DE cutoff settings")
+                      )
+                    )
+                  ),
+                  fluidRow(
+                    column(4, checkboxInput("kb_check_names", "Display names",     value = TRUE)),
+                    column(4, checkboxInput("kb_p_adj",       "Adjusted p values", value = TRUE)),
+                    column(4, checkboxInput("kb_show_gene",   "Show gene names",   value = TRUE))
+                  ),
+                  shinycssloaders::withSpinner(
+                    plotOutput("kb_volcano", height = 430,
+                               brush = brushOpts(id = "kb_protein_brush", resetOnNew = TRUE)),
+                    color = "#3c8dbc"
+                  ),
+                  downloadButton("kb_downloadVolcano", "Save Plot"),
+                  actionButton("kb_resetPlot", "Clear Selection")
+                ),
+
+                # === Gene Set Explorer ===
+                box(title = "Gene Set Explorer", width = 6,
+                  tabsetPanel(id = "kb_gs_tabset",
+                    # ---- Gene-level ORA tab ----
+                    tabPanel("Gene-level ORA",
+                      fluidRow(
+                        column(5, uiOutput("kb_gs_database_ui")),
+                        column(4, checkboxGroupInput("kb_gs_direction", "Direction",
+                                               choices = c("Up" = "UP", "Down" = "DOWN"),
+                                               inline = TRUE, selected = c("UP", "DOWN"))),
+                        column(3, shinyWidgets::dropdownButton(
+                          circle = TRUE, status = "default", right = TRUE,
+                          icon = icon("gear"), width = "300px",
+                          numericInput("kb_gs_p_cutoff", "DE p-value cutoff",
+                                       min = 0, max = 1, value = 0.05),
+                          numericInput("kb_gs_lfc_cutoff", "DE log2 fold change cutoff",
+                                       min = 0, max = 10, value = 1),
+                          checkboxInput("kb_gs_adjust_de",
+                                        "Apply adjusted p-values to select DE results",
+                                        value = TRUE),
+                          tooltip = tooltipOptions(placement = "left",
+                                                   title = "DE cutoff settings")
+                        ))
+                      ),
+                      fluidRow(
+                        column(3, actionButton("kb_gs_run_ora", "Run ORA",
+                                               icon = icon("play")))
+                      ),
+                      uiOutput("kb_gs_color_legend"),
+                      tags$div(style = "overflow-x: auto;",
+                        DT::dataTableOutput("kb_gs_table")
+                      ),
+                      br(),
+                      downloadButton("kb_dl_ora_table", "Download Table (.csv)")
+                    ),
+                    # ---- PTM-SEA tab ----
+                    tabPanel("PTM-SEA",
+                      conditionalPanel(
+                        condition = "input.exp == 'TMT-site' || input.exp == 'DIA-site'",
+                        fluidRow(
+                          column(4,
+                            selectInput("kb_ptm_subsets", "Signatures (PTMsigDB v2.0):",
+                                        choices = c("Perturbation" = "PERT",
+                                                    "Pathway"      = "PATH",
+                                                    "Disease"      = "DISEASE",
+                                                    "Kinase"       = "KINASE"),
+                                        selected = c("PERT", "PATH", "DISEASE", "KINASE"),
+                                        multiple = TRUE)
+                          ),
+                          column(2,
+                            selectInput("kb_ptm_species", "Species:",
+                                        choices = c("Human" = "human",
+                                                    "Mouse" = "mouse",
+                                                    "Rat"   = "rat"),
+                                        selected = "human")
+                          ),
+                          column(3,
+                            selectInput("kb_ptm_mod_type", "Modification:",
+                                        choices = c("Phosphorylation" = "p",
+                                                    "Acetylation"     = "ac",
+                                                    "Ubiquitination"  = "ub",
+                                                    "Methylation"     = "me",
+                                                    "Sumoylation"     = "sm"),
+                                        selected = "p")
+                          ),
+                          column(3, shinyWidgets::dropdownButton(
+                            circle = TRUE, status = "default", right = TRUE,
+                            icon = icon("gear"), width = "300px",
+                            numericInput("kb_ptm_nperm", "Permutations",
+                                         min = 1000, max = 100000, value = 1000, step = 1000),
+                            numericInput("kb_ptm_min_size", "Min set size",
+                                         min = 1, max = 50, value = 5),
+                            tooltip = tooltipOptions(placement = "left",
+                                                     title = "PTM-SEA settings")
+                          ))
+                        ),
+                        fluidRow(
+                          column(3,
+                            actionButton("kb_ptm_run_sea", "Run PTM-SEA",
+                                         icon = icon("play")),
+                            uiOutput("kb_ptm_status", inline = TRUE)
+                          )
+                        ),
+                        uiOutput("kb_ptm_color_legend"),
+                        tags$div(style = "overflow-x: auto;",
+                          DT::dataTableOutput("kb_ptm_table")
+                        ),
+                        br(),
+                        downloadButton("kb_dl_ptm_table", "Download Table (.csv)")
+                      ),
+                      conditionalPanel(
+                        condition = "input.exp != 'TMT-site' && input.exp != 'DIA-site'",
+                        tags$div(style = "text-align:center; padding:40px 20px; color:#888;",
+                          icon("info-circle", style = "font-size:24px;"),
+                          tags$p(style = "margin-top:10px;",
+                            "PTM-SEA requires site-level data.",
+                            tags$br(),
+                            "Select TMT (site) or DIA (site) as the data type.")
+                        )
+                      )
+                    ),
+                    # ---- Kinase Activity tab ----
+                    tabPanel("Kinase Activity",
+                      conditionalPanel(
+                        condition = "input.exp == 'TMT-site' || input.exp == 'DIA-site'",
+                        fluidRow(
+                          column(4,
+                            tags$p(style = "margin-top:8px;",
+                              tags$strong("Database:"),
+                              " Curated KS library (414 kinases, human)",
+                              tags$br(),
+                              tags$span(style = "font-size:11px; color:#888;",
+                                "Müller-Dott et al., Nat Commun 2025"))
+                          ),
+                          column(3,
+                            numericInput("kb_ka_min_targets", "Min substrates",
+                                         min = 1, max = 50, value = 3)
+                          ),
+                          column(3,
+                            actionButton("kb_ka_run", "Run Kinase Activity",
+                                         icon = icon("play"))
+                          )
+                        ),
+                        tags$div(style = "overflow-x: auto;",
+                          DT::dataTableOutput("kb_ka_table")
+                        ),
+                        br(),
+                        downloadButton("kb_dl_ka_table", "Download Table (.csv)")
+                      ),
+                      conditionalPanel(
+                        condition = "input.exp != 'TMT-site' && input.exp != 'DIA-site'",
+                        tags$div(style = "text-align:center; padding:40px 20px; color:#888;",
+                          icon("info-circle", style = "font-size:24px;"),
+                          tags$p(style = "margin-top:10px;",
+                            "Kinase Activity inference requires site-level data.",
+                            tags$br(),
+                            "Select TMT (site) or DIA (site) as the data type.")
+                        )
+                      )
+                    )
+                  )
+                )
+              ),
+
+              # --- Row 2: ORA Pathway Heatmap ---
+              fluidRow(
+                box(title = "ORA Pathway Heatmap", width = 12,
+                  fluidRow(
+                    column(6, uiOutput("kb_ora_database_ui")),
+                    column(6, shinyWidgets::dropdownButton(
+                      circle = TRUE, status = "default", right = TRUE,
+                      icon = icon("gear"), width = "320px",
+                      selectInput("kb_ora_value_type", "Heatmap cell value:",
+                                  choices = c(
+                                    "log2 Odds Ratio"  = "log2OR",
+                                    "p-value (-log10)" = "pvalue",
+                                    "Size (hit count)" = "size"
+                                  ),
+                                  selected = "log2OR"),
+                      numericInput("kb_ora_alpha", "p-value cutoff",
+                                   min = 0, max = 1, value = 0.05, step = 0.01),
+                      tags$small(style = "color:#888;",
+                        "Only show terms significant in at least one contrast"),
+                      checkboxInput("kb_ora_use_adjp",
+                                    "Use adjusted p-value for cutoff",
+                                    value = TRUE),
+                      checkboxInput("kb_ora_ctrl_only",
+                                    "Only include control-related comparisons",
+                                    value = TRUE),
+                      uiOutput("kb_ora_control_ui"),
+                      tooltip = tooltipOptions(placement = "left",
+                                               title = "Heatmap settings")
+                    ))
+                  ),
+                  uiOutput("kb_ora_status_ui"),
+                  uiOutput("kb_ora_heatmap_ui"),
+                  downloadButton("kb_dl_ora_heatmap", "Save Plot (.pdf)")
+                )
+              ),
+
+              # --- Row 3: Network Analysis ---
+              fluidRow(
+                box(title = "Network Analysis", width = 6,
+                  tabsetPanel(id = "kb_net_tabset",
+
+                    # ---- Single-bait PPI Network tab ----
+                    tabPanel("PPI Network",
+                      br(),
+                      fluidRow(
+                        column(6,
+                          p("Uses the comparison selected in the volcano plot above.",
+                            style = "color:#777; font-size:12px; margin-bottom:0;")
+                        ),
+                        column(3, checkboxInput("kb_ppi_bait_only",
+                                                "Bait-connected only", value = FALSE)),
+                        column(3,
+                          actionButton("kb_run_ppi", "Fetch PPI",
+                                       class = "btn-info btn-block")
+                        )
+                      ),
+                      fluidRow(
+                        column(12,
+                          tags$details(
+                            tags$summary(style = "cursor:pointer; color:#3c8dbc; font-size:12px;",
+                                         icon("sliders"), " Advanced settings"),
+                            fluidRow(
+                              column(2, selectInput("kb_ppi_species", "Species:",
+                                                    choices = c("Human" = "9606", "Mouse" = "10090"),
+                                                    selected = "9606")),
+                              column(2, numericInput("kb_ppi_score", "STRING score",
+                                                     min = 0, max = 1, value = 0.4, step = 0.05)),
+                              column(2, numericInput("kb_ppi_lfc", "LFC cutoff",
+                                                     min = 0, max = 10, value = 1, step = 0.5)),
+                              column(2, numericInput("kb_ppi_alpha", "p cutoff",
+                                                     min = 0, max = 1, value = 0.05, step = 0.01)),
+                              column(4, checkboxInput("kb_ppi_use_adjp", "Use adj. p-value", value = TRUE))
+                            )
+                          )
+                        )
+                      ),
+                      uiOutput("kb_ppi_ui"),
+                      uiOutput("kb_ppi_legend_ui"),
+                      br(),
+                      downloadButton("kb_dl_ppi_net", "Export Network (.html)")
+                    ),
+
+                    # ---- Multi-bait PPI comparison tab ----
+                    tabPanel("Multi-bait",
+                      br(),
+                      fluidRow(
+                        column(7, uiOutput("kb_multi_contrasts_ui")),
+                        column(3, checkboxInput("kb_multi_bait_only",
+                                                "Bait-connected only", value = FALSE)),
+                        column(2,
+                          actionButton("kb_run_multi_ppi", "Fetch PPI",
+                                       class = "btn-info btn-block")
+                        )
+                      ),
+                      fluidRow(
+                        column(12,
+                          tags$details(
+                            tags$summary(style = "cursor:pointer; color:#3c8dbc; font-size:12px;",
+                                         icon("sliders"), " Advanced settings"),
+                            fluidRow(
+                              column(2, selectInput("kb_multi_species", "Species:",
+                                                    choices = c("Human" = "9606", "Mouse" = "10090"),
+                                                    selected = "9606")),
+                              column(2, numericInput("kb_multi_score", "STRING score",
+                                                     min = 0, max = 1, value = 0.4, step = 0.05)),
+                              column(2, numericInput("kb_multi_lfc", "LFC cutoff",
+                                                     min = 0, max = 10, value = 1, step = 0.5)),
+                              column(2, numericInput("kb_multi_alpha", "p cutoff",
+                                                     min = 0, max = 1, value = 0.05, step = 0.01)),
+                              column(4, checkboxInput("kb_multi_use_adjp", "Use adj. p-value", value = TRUE))
+                            )
+                          )
+                        )
+                      ),
+                      uiOutput("kb_multi_ppi_ui"),
+                      uiOutput("kb_multi_legend_ui"),
+                      br(),
+                      downloadButton("kb_dl_multi_ppi_net", "Export Network (.html)")
+                    ),
+
+                    # ---- Kinase-Substrate Network tab ----
+                    tabPanel("Kinase-Substrate",
+                      br(),
+                      p("Builds a kinase-substrate network using PTM-SEA or Kinase Activity results. ",
+                        "Run the chosen analysis in the Gene Set Explorer first.",
+                        style = "color:#777; font-size:12px;"),
+                      fluidRow(
+                        column(9,
+                          fluidRow(
+                            column(4,
+                              selectInput("kb_ks_source", "Data source:",
+                                          choices = c("PTM-SEA" = "ptmsea",
+                                                      "Kinase Activity (Z-score)" = "zscore"),
+                                          selected = "ptmsea")
+                            )
+                          ),
+                          tags$details(open = "open",
+                            tags$summary(style = "cursor:pointer; color:#3c8dbc; font-size:12px;",
+                                         icon("sliders"), " Kinase settings"),
+                            fluidRow(
+                              column(3, numericInput("kb_ks_nes_cutoff", "Score cutoff (|NES|/|Z|)",
+                                                     min = 0, max = 10, value = 5, step = 0.5)),
+                              column(3, numericInput("kb_ks_p_cutoff", "Kinase p cutoff",
+                                                     min = 0, max = 1, value = 0.05, step = 0.01)),
+                              column(3, checkboxInput("kb_ks_use_adjp", "Kinase: adj. p", value = TRUE)),
+                              column(3, checkboxInput("kb_ks_hide_empty", "Hide kinase w/o substrate", value = TRUE))
+                            )
+                          ),
+                          tags$details(open = "open",
+                            tags$summary(style = "cursor:pointer; color:#3c8dbc; font-size:12px;",
+                                         icon("sliders"), " Substrate settings"),
+                            fluidRow(
+                              column(3, numericInput("kb_ks_site_lfc", "Site |LFC| cutoff",
+                                                     min = 0, max = 10, value = 1, step = 0.5)),
+                              column(3, numericInput("kb_ks_site_p", "Site p cutoff",
+                                                     min = 0, max = 1, value = 0.05, step = 0.05)),
+                              column(3, checkboxInput("kb_ks_site_use_adjp", "Substrate: adj. p", value = TRUE))
+                            )
+                          )
+                        ),
+                        column(3,
+                          actionButton("kb_run_ks_net", "Build Network",
+                                       class = "btn-info btn-block")
+                        )
+                      ),
+                      uiOutput("kb_ks_net_ui"),
+                      uiOutput("kb_ks_legend_ui"),
+                      br(),
+                      downloadButton("kb_dl_ks_net", "Export Network (.html)")
+                    )
+
+                  ) # tabsetPanel close
+                )
+              )
+            ) # kb_panel close
+
             ) # panel_list close
           ) # div close
       #bookmarkButton()
         )), #analysis tab close
-      
+
       tabItem(tabName = "info",
               fluidRow( 
                box(
