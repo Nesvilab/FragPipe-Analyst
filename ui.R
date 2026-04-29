@@ -900,7 +900,9 @@ ui <- function(request){shinyUI(
                                     value = FALSE),
                       tags$div(style = "overflow-x: auto;",
                         DT::dataTableOutput("kb_gs_table")
-                      )
+                      ),
+                      br(),
+                      downloadButton("kb_dl_ora_table", "Download Table (.csv)")
                     ),
                     # ---- PTM-SEA tab ----
                     tabPanel("PTM-SEA",
@@ -953,7 +955,9 @@ ui <- function(request){shinyUI(
                         uiOutput("kb_ptm_color_legend"),
                         tags$div(style = "overflow-x: auto;",
                           DT::dataTableOutput("kb_ptm_table")
-                        )
+                        ),
+                        br(),
+                        downloadButton("kb_dl_ptm_table", "Download Table (.csv)")
                       ),
                       conditionalPanel(
                         condition = "input.exp != 'TMT-site' && input.exp != 'DIA-site'",
@@ -990,7 +994,9 @@ ui <- function(request){shinyUI(
                         ),
                         tags$div(style = "overflow-x: auto;",
                           DT::dataTableOutput("kb_ka_table")
-                        )
+                        ),
+                        br(),
+                        downloadButton("kb_dl_ka_table", "Download Table (.csv)")
                       ),
                       conditionalPanel(
                         condition = "input.exp != 'TMT-site' && input.exp != 'DIA-site'",
@@ -1038,7 +1044,8 @@ ui <- function(request){shinyUI(
                     ))
                   ),
                   uiOutput("kb_ora_status_ui"),
-                  uiOutput("kb_ora_heatmap_ui")
+                  uiOutput("kb_ora_heatmap_ui"),
+                  downloadButton("kb_dl_ora_heatmap", "Save Plot (.pdf)")
                 )
               ),
 
@@ -1083,7 +1090,9 @@ ui <- function(request){shinyUI(
                         )
                       ),
                       uiOutput("kb_ppi_ui"),
-                      uiOutput("kb_ppi_legend_ui")
+                      uiOutput("kb_ppi_legend_ui"),
+                      br(),
+                      downloadButton("kb_dl_ppi_net", "Export Network (.html)")
                     ),
 
                     # ---- Multi-bait PPI comparison tab ----
@@ -1119,7 +1128,9 @@ ui <- function(request){shinyUI(
                         )
                       ),
                       uiOutput("kb_multi_ppi_ui"),
-                      uiOutput("kb_multi_legend_ui")
+                      uiOutput("kb_multi_legend_ui"),
+                      br(),
+                      downloadButton("kb_dl_multi_ppi_net", "Export Network (.html)")
                     ),
 
                     # ---- Kinase-Substrate Network tab ----
@@ -1168,7 +1179,9 @@ ui <- function(request){shinyUI(
                         )
                       ),
                       uiOutput("kb_ks_net_ui"),
-                      uiOutput("kb_ks_legend_ui")
+                      uiOutput("kb_ks_legend_ui"),
+                      br(),
+                      downloadButton("kb_dl_ks_net", "Export Network (.html)")
                     )
 
                   ) # tabsetPanel close

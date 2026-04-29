@@ -3146,6 +3146,62 @@ output$download_density_svg<-downloadHandler(
     }
   )
 
+  # --- KB table downloads (full data, all contrasts) ---
+  output$kb_dl_ora_table <- downloadHandler(
+    filename = function() "ORA_results.csv",
+    content  = function(file) {
+      res <- kb_gs_ora_results()
+      validate(need(!is.null(res), "No ORA results to download."))
+      write.csv(res, file, row.names = FALSE)
+    }
+  )
+
+  output$kb_dl_ptm_table <- downloadHandler(
+    filename = function() "PTM_SEA_results.csv",
+    content  = function(file) {
+      res <- kb_ptm_results()
+      validate(need(!is.null(res), "No PTM-SEA results to download."))
+      write.csv(res, file, row.names = FALSE)
+    }
+  )
+
+  output$kb_dl_ka_table <- downloadHandler(
+    filename = function() "Kinase_Activity_results.csv",
+    content  = function(file) {
+      res <- kb_ka_results()
+      validate(need(!is.null(res), "No Kinase Activity results to download."))
+      write.csv(res, file, row.names = FALSE)
+    }
+  )
+
+  # --- ORA heatmap PDF download ---
+  output$kb_dl_ora_heatmap <- downloadHandler(
+    filename = function() paste0("ORA_heatmap_", input$kb_ora_database, ".pdf"),
+    content  = function(file) {
+      res <- kb_gs_ora_results()
+      validate(need(!is.null(res) && "var" %in% colnames(res),
+                    "No ORA results to download."))
+      ora_res <- dplyr::filter(res, var == input$kb_ora_database)
+      if (isTRUE(input$kb_ora_ctrl_only) && !is.null(input$kb_ora_control) &&
+          "contrast" %in% colnames(ora_res)) {
+        ctrl <- input$kb_ora_control
+        ora_res <- dplyr::filter(ora_res,
+                                 grepl(paste0("_vs_", ctrl, "$"), contrast) |
+                                 grepl(paste0("^", ctrl, "_vs_"), contrast))
+      }
+      validate(need(nrow(ora_res) > 0, "No data after filtering."))
+      hm <- plot_ora_heatmap(
+        ora_results = ora_res,
+        value_type  = input$kb_ora_value_type,
+        alpha       = input$kb_ora_alpha,
+        use_adjp    = isTRUE(input$kb_ora_use_adjp)
+      )
+      pdf(file, width = 10, height = max(4, length(unique(ora_res$Term)) * 0.25 + 2))
+      ComplexHeatmap::draw(hm)
+      dev.off()
+    }
+  )
+
   # ===========================================================================
   # GENE SET EXPLORER
   # ===========================================================================
@@ -4007,6 +4063,38 @@ output$download_density_svg<-downloadHandler(
   # NETWORK ANALYSIS
   # ===========================================================================
 
+  # Stored network objects for HTML download
+  kb_ppi_net_stored       <- reactiveVal(NULL)
+  kb_multi_ppi_net_stored <- reactiveVal(NULL)
+  kb_ks_net_stored        <- reactiveVal(NULL)
+
+  output$kb_dl_ppi_net <- downloadHandler(
+    filename = function() "ppi_network.html",
+    content  = function(file) {
+      net <- kb_ppi_net_stored()
+      validate(need(!is.null(net), "Build the PPI network first."))
+      htmlwidgets::saveWidget(net, file, selfcontained = TRUE)
+    }
+  )
+
+  output$kb_dl_multi_ppi_net <- downloadHandler(
+    filename = function() "multi_bait_ppi_network.html",
+    content  = function(file) {
+      net <- kb_multi_ppi_net_stored()
+      validate(need(!is.null(net), "Build the Multi-bait PPI network first."))
+      htmlwidgets::saveWidget(net, file, selfcontained = TRUE)
+    }
+  )
+
+  output$kb_dl_ks_net <- downloadHandler(
+    filename = function() "kinase_substrate_network.html",
+    content  = function(file) {
+      net <- kb_ks_net_stored()
+      validate(need(!is.null(net), "Build the Kinase-Substrate network first."))
+      htmlwidgets::saveWidget(net, file, selfcontained = TRUE)
+    }
+  )
+
   # --- PPI network output ---
   output$kb_ppi_ui <- renderUI({
     req(input$kb_run_ppi)
@@ -4026,6 +4114,7 @@ output$download_density_svg<-downloadHandler(
       use_adjp      = isTRUE(input$kb_ppi_use_adjp),
       bait_connected_only = isTRUE(input$kb_ppi_bait_only)
     )
+    kb_ppi_net_stored(result$network)
     output$kb_ppi_network <- visNetwork::renderVisNetwork({ result$network })
     output$kb_ppi_legend_ui <- renderUI({
       ppi_legend_html(
@@ -4068,6 +4157,7 @@ output$download_density_svg<-downloadHandler(
       use_adjp           = isTRUE(input$kb_multi_use_adjp),
       bait_connected_only = isTRUE(input$kb_multi_bait_only)
     )
+    kb_multi_ppi_net_stored(result$network)
     output$kb_multi_ppi_network <- visNetwork::renderVisNetwork({ result$network })
     output$kb_multi_legend_ui <- renderUI({
       bait_palette <- c("#e74c3c", "#3498db", "#2ecc71", "#f39c12",
@@ -4151,6 +4241,7 @@ output$download_density_svg<-downloadHandler(
 
     if (is.null(result)) return()
 
+    kb_ks_net_stored(result$network)
     output$kb_ks_network <- visNetwork::renderVisNetwork({ result$network })
     output$kb_ks_legend_ui <- renderUI({
       kinase_substrate_legend_html(
