@@ -3840,7 +3840,7 @@ output$download_density_svg<-downloadHandler(
       rows      <- head(selected_rows, 2L)
       tbl       <- tryCatch(kb_gs_table_data(), error = function(e) NULL)
       col_cache <- kb_gs_collection_cache()
-      show_all  <- isTRUE(input$kb_gs_show_all_genes)
+      show_all  <- TRUE
 
       if (!is.null(tbl) && "Gene Set" %in% colnames(tbl)) {
         set_names_sel <- tbl[["Gene Set"]][rows]

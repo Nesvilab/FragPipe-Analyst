@@ -246,7 +246,7 @@ test_ora_mod <- function(dep,
         temp <- as.data.frame(result)
 
         temp$contrast <- gsub("_significant", "", contrast)
-        temp$OUT <- dim(significant)[1] - temp$Count
+        temp$OUT <- length(genes) - temp$Count
         df_enrich <- rbind(df_enrich, temp)
       }
       lookup <- c("Term"="Description", "P.value"="pvalue", "Adjusted.P.value"="p.adjust", "IN"="Count")

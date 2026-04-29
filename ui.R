@@ -895,9 +895,6 @@ ui <- function(request){shinyUI(
                                                icon = icon("play")))
                       ),
                       uiOutput("kb_gs_color_legend"),
-                      checkboxInput("kb_gs_show_all_genes",
-                                    "Label all genes in gene set",
-                                    value = FALSE),
                       tags$div(style = "overflow-x: auto;",
                         DT::dataTableOutput("kb_gs_table")
                       ),
