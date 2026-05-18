@@ -2373,7 +2373,9 @@ plot_feature <- function(dep, protein, type, id="ID", show_gene = F){
           df_reps$rowname <- paste0(rowData(subset)[df_reps$rowname, "Gene"], "_", gsub(".*_", "", rowData(subset)[df_reps$rowname, "Peptide"]))
         }
       } else { # LFQ
-        if (!"Modified Sequence" %in% colnames(rowData(subset))) {
+        if (metadata(dep)$level == "site") {
+          df_reps$rowname <- paste0(rowData(subset)[df_reps$rowname, "Gene"], "_", gsub(".*_", "", rowData(subset)[df_reps$rowname, "ID"]))
+        } else if (!"Modified Sequence" %in% colnames(rowData(subset))) {
           df_reps$rowname <- paste0(rowData(subset)[df_reps$rowname, "Gene"], "_", rowData(subset)[df_reps$rowname, "Peptide.Sequence"])
         } else {  # customized logic for combined_modified_peptide.tsv
           df_reps$rowname <- paste0(rowData(subset)[df_reps$rowname, "Gene"], "_", rowData(subset)[df_reps$rowname, "Modified Sequence"])
@@ -2508,14 +2510,21 @@ plot_volcano_customized <- function(dep, contrast, label_size = 3, name_col = NU
   signif <- abs(row_data[,diff]) >= lfc & row_data[, p_values] <= alpha
   if (!show_gene) {
     if (metadata(dep)$exp == "LFQ") {
-      if (metadata(dep)$level != "peptide") { # protein or site
+      if (metadata(dep)$level == "site") {
+        df_tmp <- data.frame(diff = row_data[, diff],
+                             p_values = -log10(row_data[, p_values]),
+                             signif = signif,
+                             name = row_data$ID,
+                             ID = row_data$ID,
+                             label = row_data[,name_col])
+      } else if (metadata(dep)$level == "protein") {
         df_tmp <- data.frame(diff = row_data[, diff],
                              p_values = -log10(row_data[, p_values]),
                              signif = signif,
                              name = row_data$name,
                              ID = row_data$ID,
                              label = row_data[,name_col])
-      } else {
+      } else { # peptide
         df_tmp <- data.frame(diff = row_data[, diff],
                              p_values = -log10(row_data[, p_values]),
                              signif = signif,
@@ -2553,16 +2562,21 @@ plot_volcano_customized <- function(dep, contrast, label_size = 3, name_col = NU
     }
   } else {
     if (metadata(dep)$exp == "LFQ") {
-      if (metadata(dep)$level != "peptide") {
+      if (metadata(dep)$level == "site") {
         df_tmp <- data.frame(diff = row_data[, diff],
                              p_values = -log10(row_data[, p_values]),
                              signif = signif,
-                             name = row_data$Gene)
-      } else {
+                             name = paste0(row_data$Gene, "_", gsub(".*_", "", row_data$ID)))
+      } else if (metadata(dep)$level == "peptide") {
         df_tmp <- data.frame(diff = row_data[, diff],
                              p_values = -log10(row_data[, p_values]),
                              signif = signif,
                              name = paste0(row_data$Gene, "_", row_data$Peptide.Sequence))
+      } else {
+        df_tmp <- data.frame(diff = row_data[, diff],
+                             p_values = -log10(row_data[, p_values]),
+                             signif = signif,
+                             name = row_data$Gene)
       }
     } else if (metadata(dep)$exp == "TMT") {
       if (metadata(dep)$level == "protein") {
@@ -2791,6 +2805,17 @@ get_results_proteins_customized <- function(dep) {
       table <- dplyr::left_join(table, pval, by = c("ID" = "rowname"))
       table <- as.data.frame(row_data) %>%
         dplyr::select(ID, imputed, num_NAs, Description) %>%
+        dplyr::left_join(table, ., by = "ID")
+      table <- table %>% dplyr::arrange(desc(significant))
+      colnames(table)[1] <- c("Index")
+      colnames(table)[2] <- c("Protein ID")
+      colnames(table)[3] <- c("Gene Name")
+    } else if(metadata(dep)$level == "site") {
+      ids <- as.data.frame(row_data) %>% dplyr::select(ID, name, Gene)
+      table <- dplyr::left_join(ids, ratio, by=c("ID"="rowname"))
+      table <- dplyr::left_join(table, pval, by = c("ID" = "rowname"))
+      table <- as.data.frame(row_data) %>%
+        dplyr::select(ID, imputed, num_NAs) %>%
         dplyr::left_join(table, ., by = "ID")
       table <- table %>% dplyr::arrange(desc(significant))
       colnames(table)[1] <- c("Index")

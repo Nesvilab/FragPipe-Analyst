@@ -110,7 +110,7 @@ test_ora_mod <- function(dep,
     background <- unique(row_data$ID)
   } else if (metadata(dep)$level == "protein") {
       background <- unique(gsub("[.].*", "", row_data$name))
-  } else if (metadata(dep)$exp == "LFQ" & metadata(dep)$level == "peptide") {
+  } else if (metadata(dep)$exp == "LFQ" & metadata(dep)$level %in% c("peptide", "site")) {
     background <- unique(row_data$Gene)
   } else if (metadata(dep)$exp == "TMT" & metadata(dep)$level %in% c("peptide", "site")) {
     background <- unique(row_data$Gene)
@@ -188,7 +188,7 @@ test_ora_mod <- function(dep,
           genes <- unique(significant$ID)
         } else if (metadata(dep)$level == "protein") {
           genes <- significant$name
-        } else if (metadata(dep)$exp == "LFQ" & metadata(dep)$level == "peptide") {
+        } else if (metadata(dep)$exp == "LFQ" & metadata(dep)$level %in% c("peptide", "site")) {
           genes <- unique(significant$Gene)
         } else if (metadata(dep)$exp == "TMT" & metadata(dep)$level %in% c("peptide", "site")) {
           genes <- unique(significant$Gene)
@@ -427,7 +427,7 @@ test_ora_mod <- function(dep,
           genes <- unique(significant$ID)
         } else if (metadata(dep)$level == "protein") {
           genes <- significant$name
-        } else if (metadata(dep)$exp == "LFQ" & metadata(dep)$level == "peptide") {
+        } else if (metadata(dep)$exp == "LFQ" & metadata(dep)$level %in% c("peptide", "site")) {
           genes <- unique(significant$Gene)
         } else if (metadata(dep)$exp == "TMT" & metadata(dep)$level %in% c("peptide", "site")) {
           genes <- unique(significant$Gene)

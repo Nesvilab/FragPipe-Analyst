@@ -85,7 +85,7 @@ server <- function(input, output, session) {
       hideTab(inputId="qc_tabBox", target="sample_coverage_tab")
       showTab(inputId = "tab_panels", target = "quantification_panel")
       updateTabsetPanel(session, "tab_panels", selected = "quantification_panel")
-    } else { # LFQ-peptide
+    } else { # LFQ-peptide, LFQ-site
       hideTab(inputId = "tab_panels", target = "occ_panel")
       hideTab(inputId="qc_tabBox", target="missingval_heatmap_tab")
       showTab(inputId="qc_tabBox", target="sample_coverage_tab")
@@ -128,6 +128,9 @@ server <- function(input, output, session) {
        } else if (input$exp == "LFQ-peptide") {
          inFile <- input$lfq_pept_expr
          exp_design_file <- input$lfq_pept_annot
+       } else if (input$exp == "LFQ-site") {
+         inFile <- input$lfq_site_expr
+         exp_design_file <- input$lfq_site_annot
        } else if (input$exp == "TMT-peptide") {
          inFile <- input$tmt_pept_expr
          exp_design_file <- input$tmt_pept_annot
@@ -295,6 +298,8 @@ server <- function(input, output, session) {
         inFile <- input$dia_expr
       } else if (input$exp == "LFQ-peptide") {
         inFile <- input$lfq_pept_expr
+      } else if (input$exp == "LFQ-site") {
+        inFile <- input$lfq_site_expr
       } else if (input$exp == "TMT-peptide") {
         inFile <- input$tmt_pept_expr
       } else if (input$exp == "TMT-site") {
@@ -346,6 +351,15 @@ server <- function(input, output, session) {
           temp_data$Index <- paste0(temp_data$`Protein ID`, "_", temp_data$`Peptide Sequence`)
         } else {
           temp_data$Index <- paste0(temp_data$`Protein ID`, "_", temp_data$`Modified Sequence`)
+        }
+      } else if (input$exp == "LFQ-site") {
+        colnames(temp_data) <- gsub("-", ".", colnames(temp_data))
+        meta_cols <- c("Index", "Gene", "Protein", "Protein ID", "Peptide")
+        mut.cols <- colnames(temp_data)[!colnames(temp_data) %in% meta_cols &
+                                          !grepl("Localization Probability", colnames(temp_data))]
+        temp_data[mut.cols] <- sapply(temp_data[mut.cols], as.numeric)
+        if (isTRUE(input$contam_rm)) {
+          temp_data <- temp_data[!grepl("contam", temp_data$Protein),]
         }
       } else if (input$exp %in% c("TMT-peptide", "TMT-site")) {
         mut.cols <- colnames(temp_data)[!colnames(temp_data) %in% c("Index", "Gene", "ProteinID",	"Peptide",
@@ -410,6 +424,8 @@ server <- function(input, output, session) {
         inFile <- input$dia_manifest
       } else if (input$exp == "LFQ-peptide") {
         inFile <- input$lfq_pept_annot
+      } else if (input$exp == "LFQ-site") {
+        inFile <- input$lfq_site_annot
       } else if (input$exp == "TMT-peptide") {
         inFile <- input$tmt_pept_annot
       } else if (input$exp == "TMT-site") {
@@ -498,6 +514,18 @@ server <- function(input, output, session) {
             temp_df$label <- paste(temp_df$label, "MaxLFQ.Intensity", sep=" ")
           }  else if (input$lfq_type == "Spectral Count") {
             temp_df$label <- paste(temp_df$label, "Spectral.Count", sep=" ")
+          }
+        }
+      } else if (input$exp == "LFQ-site") {
+        required_columns <- c("file", "sample", "sample_name", "condition", "replicate")
+        temp_df$condition <- make.names(temp_df$condition)
+        if (!all(is.na(temp_df$replicate))) {
+          temp_df$sample <- gsub("-", ".", temp_df$sample)
+          temp_df$label <- temp_df$sample
+          if (input$lfq_site_type == "Intensity") {
+            temp_df$label <- paste(temp_df$label, "Intensity", sep=" ")
+          } else { # MaxLFQ
+            temp_df$label <- paste(temp_df$label, "MaxLFQ Intensity", sep=" ")
           }
         }
       } else if (input$exp == "DIA" | input$exp == "DIA-peptide" | input$exp == "DIA-site") {
@@ -713,6 +741,20 @@ server <- function(input, output, session) {
          data_se <- make_se_customized(data_unique, lfq_columns, exp_design(), log2transform=T, exp="LFQ", lfq_type=input$lfq_pept_type, level="peptide")
        }
        return(data_se)
+     } else if (input$exp == "LFQ-site") {
+       data_unique <- make_unique(filtered_data, "Protein ID", "Index")
+       if (input$lfq_site_type == "Intensity") {
+         lfq_columns <- setdiff(grep("Intensity", colnames(data_unique)),
+                                grep("MaxLFQ", colnames(data_unique)))
+       } else { # MaxLFQ
+         lfq_columns <- grep("MaxLFQ", colnames(data_unique))
+         if (length(lfq_columns) == 0) {
+           stop(safeError("No MaxLFQ column available. Please make sure your combined_site file has MaxLFQ intensity columns."))
+         }
+       }
+       test_match_lfq_column_manifest(data_unique, lfq_columns, exp_design())
+       data_se <- make_se_customized(data_unique, lfq_columns, exp_design(), log2transform=T, exp="LFQ", lfq_type=input$lfq_site_type, level="site")
+       return(data_se)
      } else if (input$exp %in% c("TMT-peptide", "TMT-site")) {
        temp_exp_design <- exp_design()
        # sample without specified condition will be removed
@@ -802,13 +844,19 @@ server <- function(input, output, session) {
        return(filtered_data())
      } else {
        if (input$normalization == "vsn") {
-         if (input$exp %in% c("LFQ", "LFQ-peptide")) {
-             if (input$lfq_type == "Spectral Count") {
-               return(filtered_data())
+         if (input$exp %in% c("LFQ")) {
+           if (input$lfq_type == "Spectral Count") {
+             return(filtered_data())
              } else {
                return(normalize_vsn(filtered_data()))
              }
-         } else if (input$exp %in% c("DIA", "DIA-peptide", "DIA-site") ) {
+         } else if (input$exp %in% c("LFQ-peptide")) {
+           if (input$lfq_pept_type == "Spectral Count") {
+             return(filtered_data())
+           } else {
+             return(normalize_vsn(filtered_data()))
+           }
+         } else if (input$exp %in% c("DIA", "DIA-peptide", "DIA-site", "LFQ-site") ) { # No Spectral Count option for LFQ-site
              return(normalize_vsn(filtered_data()))
          }
        } else if (input$normalization == "MD"){
@@ -1385,7 +1433,7 @@ server <- function(input, output, session) {
         protein_selected <- data_result()[input$contents_rows_selected, c("Index")]
       } else if (metadata(data)$exp == "DIA") {
         protein_selected <- data_result()[input$contents_rows_selected, c("Protein ID")]
-      } else if (metadata(data)$exp == "LFQ" & metadata(data)$level == "peptide") {
+      } else if (metadata(data)$exp == "LFQ" & metadata(data)$level %in% c("peptide", "site")) {
         protein_selected <- data_result()[input$contents_rows_selected, c("Index")]
       } else {
         protein_selected <- data_result()[input$contents_rows_selected, c("Protein ID")]
@@ -1570,7 +1618,7 @@ server <- function(input, output, session) {
     } else {
       yvar <- "p_value_-log10"
     }
-    if (!input$exp %in% c("TMT-peptide", "DIA-peptide", "LFQ-peptide",
+    if (!input$exp %in% c("TMT-peptide", "DIA-peptide", "LFQ-peptide", "LFQ-site",
                           "TMT-site", "DIA-site")) {
       if(is.null(input$contents_rows_selected)){
         protein_tmp<-brushedPoints(plot_volcano_customized(dep(),
@@ -2020,7 +2068,7 @@ output$download_hm_svg<-downloadHandler(
                               colnames(SummarizedExperiment::rowData(dep())))])
 
       # Set up parameters to pass to Rmd document
-      if (input$exp %in% c("LFQ-peptide", "DIA-peptide", "TMT-peptide",
+      if (input$exp %in% c("LFQ-peptide", "LFQ-site", "DIA-peptide", "TMT-peptide",
                            "DIA-site", "TMT-site")) {
         temp_missval_input <- NA
       } else {
