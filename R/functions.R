@@ -17,10 +17,10 @@ coef_variation<-function(x){
 
 #### Plot CVs
 
-plot_cvs <- function(se, id="ID", scale=T, check.names=T) {
-  
+plot_cvs <- function(se, id="ID", scale=T, check.names=T, log2_transform=TRUE) {
+
   ## backtransform data
-  untransformed_intensity<- 2^(assay(se))
+  untransformed_intensity <- if (log2_transform) 2^(assay(se)) else assay(se)
   exp_design<-colData(se)
 
   ### merge untransformed to exp design and calculate cvs
