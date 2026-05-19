@@ -161,7 +161,7 @@ test_ora_mod <- function(dep,
       } else if (startsWith(databases, "WikiPathways")) {
         organism_map <- ifelse(endsWith(databases, "(Mouse)"), "Mus musculus", "Homo sapiens")
       } else if (databases == "Hallmark") {
-        hallmark <- msigdbr::msigdbr(species = "Homo sapiens", category = "H") %>%
+        hallmark <- msigdbr::msigdbr(species = "Homo sapiens", collection = "H") %>%
           select(gs_name, gene_symbol)
       } else if (!databases %in% c("Reactome", "MF", "BP", "CC")) {
         stop("Not a valid database, please choose from 'KEGG', 'WikiPathways', 'Hallmark', 'Reactome', 'MF', 'BP', 'CC'",
@@ -320,7 +320,7 @@ test_ora_mod <- function(dep,
                            qvalueCutoff = 1)
         result <- setReadable(result, OrgDb = organism_db_map, keyType = "ENTREZID")
       } else if (databases == "Hallmark") {
-        hallmark <- msigdbr::msigdbr(species = "Homo sapiens", category = "H") %>%
+        hallmark <- msigdbr::msigdbr(species = "Homo sapiens", collection = "H") %>%
           select(gs_name, gene_symbol)
         result <- enricher(genes, universe = background,
                            TERM2GENE = hallmark, pvalueCutoff = 1, qvalueCutoff = 1)
