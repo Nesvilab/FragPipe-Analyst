@@ -935,6 +935,14 @@ server <- function(input, output, session) {
          "QC plots (PCA, sample correlation, missing values, etc.) are still available."
        )
      ))
+     validate(need(
+       ncol(data) > length(conditions),
+       paste0(
+         "Differential expression analysis requires at least 2 replicates per condition. ",
+         "The current design has ", length(conditions), " condition(s) across ", ncol(data), " sample(s), ",
+         "leaving no residual degrees of freedom for variance estimation."
+       )
+     ))
      if (input$exp == "LFQ" & input$lfq_type == "Spectral Count") {
        assay(data) <- log2(assay(data))
      } else if (input$exp == "LFQ-peptide" & input$lfq_pept_type == "Spectral Count") {
