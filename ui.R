@@ -155,10 +155,21 @@ ui <- function(request){shinyUI(
                                        min = 0, max = 100, value = 0),
                           radioButtons("DE_type",
                                        "Type of DE analysis",
-                                       choices = c("all pairs"="all", "test vs control"="control", "one vs others"="others")),
-                          textInput("control_condition",
-                                    "Name(s) of control condition",
-                                    value=""),
+                                       choices = c("all pairs"="all", "test vs control"="control", "one vs others"="others",
+                                                   "custom comparisons"="manual")),
+                          conditionalPanel(
+                            condition = "input.DE_type != 'manual'",
+                            textInput("control_condition",
+                                      "Name(s) of control condition",
+                                      value="")
+                          ),
+                          conditionalPanel(
+                            condition = "input.DE_type == 'manual'",
+                            textInput("custom_comparisons",
+                                      "Comparisons (test_vs_control), separated by ';'",
+                                      value="",
+                                      placeholder="A_vs_B;C_vs_D")
+                          ),
                           # checkboxInput("paired",
                           #               "Paired test", FALSE),
                           numericInput("p", 

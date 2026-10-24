@@ -921,6 +921,26 @@ server <- function(input, output, session) {
      test_diff_customized(imputed_data(), type = "all")
    })
 
+   # Parse custom comparisons such as "A_vs_B;C_vs_D" into c("A_vs_B", "C_vs_D")
+   manual_contrasts <- eventReactive(input$analyze, {
+     conditions <- as.character(unique(colData(processed_data())$condition))
+     tests <- str_trim(unlist(str_split(input$custom_comparisons, ";")))
+     tests <- tests[nzchar(tests)]
+     validate(need(length(tests) >= 1,
+                   "Please specify at least one comparison, e.g. 'A_vs_B;C_vs_D'."))
+     pairs <- str_split(tests, fixed("_vs_"))
+     validate(need(all(lengths(pairs) == 2),
+                   paste0("Each comparison should be in the form 'A_vs_B', separated by ';'. ",
+                          "Invalid: '", paste(tests[lengths(pairs) != 2], collapse = "', '"), "'.")))
+     invalid <- setdiff(unlist(pairs), conditions)
+     validate(need(length(invalid) == 0,
+                   paste0("Unknown condition(s) in comparisons: '", paste(invalid, collapse = "', '"),
+                          "'. Valid conditions are: '", paste(conditions, collapse = "', '"), "'.")))
+     validate(need(all(sapply(pairs, function(x) x[1] != x[2])),
+                   "A condition cannot be compared with itself."))
+     unique(sapply(pairs, paste, collapse = "_vs_"))
+   })
+
    dep <- eventReactive(input$analyze, {
      # TODO: test_limma for paired samples
      # diff_all <- test_diff_customized(imputed_data(), type = "manual",
@@ -957,6 +977,8 @@ server <- function(input, output, session) {
          diff_all <- test_limma_customized(data, type="control", control=control, paired = F)
        } else if (input$DE_type == "others") {
          diff_all <- test_limma_customized(data, type="others", paired = F)
+       } else if (input$DE_type == "manual") {
+         diff_all <- test_limma_customized(data, type="manual", test=manual_contrasts(), paired = F)
        }
      } else { # t-statistics-based
        if (input$DE_type == "all") {
@@ -965,6 +987,8 @@ server <- function(input, output, session) {
          diff_all <- test_diff_customized(data, type="control", control=control)
        } else if (input$DE_type == "others") {
          diff_all <- test_diff_customized(data, type="others")
+       } else if (input$DE_type == "manual") {
+         diff_all <- test_diff_customized(data, type="manual", test=manual_contrasts())
        }
      }
      result_se <- add_rejections_customized(diff_all, alpha = input$p, lfc= input$lfc)
@@ -1012,6 +1036,8 @@ server <- function(input, output, session) {
          }
        } else if (input$DE_type == "others") {
          cntrst <- paste0(conditions, "_vs_others")
+       } else if (input$DE_type == "manual") {
+         cntrst <- manual_contrasts()
        }
        temp <- gsub(" - ", "_vs_", cntrst)
        return(temp)

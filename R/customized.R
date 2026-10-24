@@ -256,15 +256,13 @@ test_diff_customized <- function(se, type = c("control", "all", "others", "manua
     # print(made_contrasts)
     contrast_fit <- contrasts.fit(fit, made_contrasts)
     
-    if (type != "manual") {
-      if(any(is.na(raw))) {
-        for(i in cntrst) {
-          covariates <- strsplit(i, " - ") %>% unlist
-          single_contrast <- makeContrasts(contrasts = i, levels = design[, covariates])
-          single_contrast_fit <- contrasts.fit(fit[, covariates], single_contrast)
-          contrast_fit$coefficients[, i] <- single_contrast_fit$coefficients[, 1]
-          contrast_fit$stdev.unscaled[, i] <- single_contrast_fit$stdev.unscaled[, 1]
-        }
+    if(any(is.na(raw))) {
+      for(i in cntrst) {
+        covariates <- strsplit(i, " - ") %>% unlist
+        single_contrast <- makeContrasts(contrasts = i, levels = design[, covariates])
+        single_contrast_fit <- contrasts.fit(fit[, covariates], single_contrast)
+        contrast_fit$coefficients[, i] <- single_contrast_fit$coefficients[, 1]
+        contrast_fit$stdev.unscaled[, i] <- single_contrast_fit$stdev.unscaled[, 1]
       }
     }
     eB_fit <- eBayes(contrast_fit)
