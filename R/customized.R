@@ -173,18 +173,15 @@ test_diff_customized <- function(se, type = c("control", "all", "others", "manua
   conditions <- as.character(unique(col_data$condition))
   if(type == "all") {
     # All possible combinations
-    cntrst <- apply(utils::combn(conditions, 2), 2, paste, collapse = " - ")
+    pairs <- utils::combn(conditions, 2)
     
     if(!is.null(control)) {
       # Make sure that contrast containing
       # the control sample have the control as denominator
-      flip <- grep(paste("^", control, sep = ""), cntrst)
-      if(length(flip) >= 1) {
-        cntrst[flip] <- cntrst[flip] %>%
-          gsub(paste(control, "- ", sep = " "), "", .) %>%
-          paste(" - ", control, sep = "")
-      }
+      flip <- pairs[1, ] %in% control & !pairs[2, ] %in% control
+      pairs[, flip] <- pairs[2:1, flip]
     }
+    cntrst <- apply(pairs, 2, paste, collapse = " - ")
     
   } else if(type == "control") {
     # Throw error if no control argument is present
@@ -1278,18 +1275,15 @@ test_limma_customized <- function(se, type = c("control", "all", "others", "manu
   conditions <- as.character(unique(col_data$condition))
   if(type == "all") {
     # All possible combinations
-    cntrst <- apply(utils::combn(conditions, 2), 2, paste, collapse = " - ")
+    pairs <- utils::combn(conditions, 2)
     
     if(!is.null(control)) {
       # Make sure that contrast containing
       # the control sample have the control as denominator
-      flip <- grep(paste("^", control, sep = ""), cntrst)
-      if(length(flip) >= 1) {
-        cntrst[flip] <- cntrst[flip] %>%
-          gsub(paste(control, "- ", sep = " "), "", .) %>%
-          paste(" - ", control, sep = "")
-      }
+      flip <- pairs[1, ] %in% control & !pairs[2, ] %in% control
+      pairs[, flip] <- pairs[2:1, flip]
     }
+    cntrst <- apply(pairs, 2, paste, collapse = " - ")
     
   } else if(type == "control") {
     if(is.null(control)) { # Throw error if no control argument is present
