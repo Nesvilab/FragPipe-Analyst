@@ -192,9 +192,13 @@ test_diff_customized <- function(se, type = c("control", "all", "others", "manua
       stop("run test_diff(type = 'control') with a 'control' argument")
     
     # Make contrasts
-    cntrst <- paste(conditions[!conditions %in% control],
-                    control,
-                    sep = " - ")
+    conditions_other_than_control <- conditions[!conditions %in% control]
+    cntrst <- c()
+    for (i in 1:length(control)) {
+      cntrst <- c(cntrst,
+                  paste(conditions_other_than_control,
+                        control[i], sep = " - "))
+    }
   } else if(type == "manual") {
     # Throw error if no test argument is present
     if(is.null(test)) {
