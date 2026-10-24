@@ -976,7 +976,7 @@ server <- function(input, output, session) {
        conditions <- as.character(unique(colData(processed_data())$condition))
        if(input$DE_type == "all") {
          # All possible combinations
-         cntrst <- apply(utils::combn(conditions, 2), 2, paste, collapse = " - ")
+         pairs <- utils::combn(conditions, 2)
          # If control condition is specified, flip so control is always the denominator
          if (nzchar(input$control_condition)) {
            if (!grepl(";", input$control_condition)) {
@@ -984,15 +984,10 @@ server <- function(input, output, session) {
            } else {
              control <- unlist(str_split(input$control_condition, ";"))
            }
-           for (ctrl in control) {
-             flip <- grep(paste0("^", ctrl, " - "), cntrst)
-             if (length(flip) >= 1) {
-               cntrst[flip] <- cntrst[flip] %>%
-                 gsub(paste0(ctrl, " - "), "", .) %>%
-                 paste0(" - ", ctrl)
-             }
-           }
+           flip <- pairs[1, ] %in% control & !pairs[2, ] %in% control
+           pairs[, flip] <- pairs[2:1, flip]
          }
+         cntrst <- apply(pairs, 2, paste, collapse = " - ")
        } else if (input$DE_type == "control") {
          if (!grepl(";", input$control_condition)) {
            control <- input$control_condition
