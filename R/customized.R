@@ -1499,9 +1499,9 @@ manual_impute_customized <- function(se, scale = 0.3, shift = 1.8) {
 #' @param fun "bpca", "knn", "QRILC", "MLE", "MinDet",
 #' "MinProb", "man", "min", "zero", "mixed" or "nbavg",
 #' Function used for data imputation based on \code{\link{manual_impute}}
-#' and \code{\link[MSnbase:impute-methods]{impute}}.
+#' and \code{\link[MsCoreUtils:imputation]{impute_matrix}}.
 #' @param ... Additional arguments for imputation functions as depicted in
-#' \code{\link{manual_impute}} and \code{\link[MSnbase:impute-methods]{impute}}.
+#' \code{\link{manual_impute}} and \code{\link[MsCoreUtils:imputation]{impute_matrix}}.
 #' @return An imputed SummarizedExperiment object.
 #' @examples
 #' # Load example
@@ -1563,11 +1563,9 @@ impute_customized <- function(se, fun = c("bpca", "knn", "QRILC", "MLE", "RF",
   if(fun == "man") {
     se <- manual_impute_customized(se, ...)
   }
-  # else use the MSnSet::impute function
+  # else use MsCoreUtils::impute_matrix, which MSnbase::impute wraps
   else {
-    MSnSet_data <- as(se, "MSnSet")
-    MSnSet_imputed <- MSnbase::impute(MSnSet_data, method = fun, ...)
-    assay(se) <- MSnbase::exprs(MSnSet_imputed)
+    assay(se) <- MsCoreUtils::impute_matrix(assay(se), method = fun, ...)
   }
   return(se)
 }
