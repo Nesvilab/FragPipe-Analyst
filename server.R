@@ -1468,10 +1468,6 @@ server <- function(input, output, session) {
      plot_missval_customized(filtered_data())
    })
    
-   detect_input <- reactive({
-     plot_detect(filtered_data())
-   })
-   
    density_input <- reactive({
      if (input$exp == "LFQ" & input$lfq_type == "Spectral Count") {
        if (input$imputation == "none") {
@@ -1782,16 +1778,8 @@ server <- function(input, output, session) {
     missval_input()
   })
   
-  output$detect <- renderPlot({
-    detect_input()
-  })
-  
   output$density <- renderPlot({
     density_input()
-  })
-  
-  output$p_hist <- renderPlot({
-    p_hist_input()
   })
   
   output$numbers <- renderPlot({
@@ -2105,7 +2093,6 @@ output$download_hm_svg<-downloadHandler(
                      num_signif= sig_proteins,
                      tested_contrasts= tested_contrasts,
                      numbers_input= numbers_input,
-                     detect_input = detect_input,
                      density_input = density_input,
                      missval_input = temp_missval_input,
                      # p_hist_input = p_hist_input,
