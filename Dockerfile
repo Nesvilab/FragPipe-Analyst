@@ -15,12 +15,14 @@ RUN apt-get update && apt-get install -yq \
     texlive-latex-extra
 
 RUN Rscript -e 'install.packages(c("devtools", "BiocManager", "tidyverse", "ggrepel", "httr", "rjson", "mvtnorm", "tmvtnorm", \
-"imputeLCMD", "plotly", "DT", "testthat", "RColorBrewer", "shiny","shinyalert","shinydashboard", \
+"plotly", "DT", "testthat", "RColorBrewer", "shiny","shinyalert","shinydashboard", \
 "shinyjs", "svglite", "rhandsontable", "shinyBS", "shinyWidgets", "ggVennDiagram", "conflicted", "png", "vegan", "assertthat", "jsonlite", \
 "shinycssloaders","data.table", "factoextra", "UpSetR","fastcluster","fdrtool"), dependencies=TRUE)'
 ### #FROM bioconductor/bioconductor_docker:RELEASE_3_19
-RUN Rscript -e 'devtools::install_github("Appsilon/shiny.info")'
-RUN Rscript -e 'BiocManager::install(pkgs=c("ensembldb", "EnsDb.Hsapiens.v86", "SummarizedExperiment", "limma", "ComplexHeatmap", "MSnbase", "missForest", "impute", "pcaMethods", "clusterProfiler", "org.Hs.eg.db", "org.Mm.eg.db", "ReactomePA"), ask=F, dependencies=TRUE)'
+# Install from the source archive rather than install_github(), which calls the
+# GitHub API and fails with HTTP 403 when CI runners hit its rate limit
+RUN Rscript -e 'remotes::install_url("https://github.com/Appsilon/shiny.info/archive/f909a3f3142418bf53a02ca06ecd2d3d28438b7c.tar.gz")'
+RUN Rscript -e 'BiocManager::install(pkgs=c("ensembldb", "EnsDb.Hsapiens.v86", "SummarizedExperiment", "limma", "ComplexHeatmap", "MSnbase", "missForest", "impute", "pcaMethods", "clusterProfiler", "org.Hs.eg.db", "org.Mm.eg.db", "ReactomePA", "msigdbr", "imputeLCMD"), ask=F, dependencies=TRUE)'
 
 ### RUN Rscript -e 'install.packages("renv")'
 COPY ./ /srv/shiny-server/fragpipe-analyst
