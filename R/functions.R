@@ -579,3 +579,100 @@ delete_prefix <- function(words) {
   # Delete prefix from words
   gsub(paste0("^", prefix), "", words)
 }
+
+#### FragPipe DIA quantification reports (combined_*.tsv)
+# FragPipe's own DIA quantification writes combined_protein/gene/peptide/site.tsv with
+# "<run> Intensity" and "<run> MaxLFQ Intensity" columns, where <run> is the raw file
+# name without folder and extension. These helpers convert them into the layouts the DIA
+# code already handles: DIA-NN pg_matrix for protein/gene and FragPipe abundance_*.tsv for
+# peptide/site.
+is_fragdia_report <- function(df) {
+  "Global Protein Q Value" %in% colnames(df) & any(grepl(" Intensity$", colnames(df)))
+}
+
+convert_fragdia_report <- function(df, level = c("protein", "peptide", "site"),
+                                   intensity_type = c("MaxLFQ", "Intensity"), contam_rm = TRUE) {
+  level <- match.arg(level)
+  intensity_type <- match.arg(intensity_type)
+  cols <- colnames(df)
+  maxlfq_cols <- grep(" MaxLFQ Intensity$", cols, value = TRUE)
+  if (intensity_type == "MaxLFQ") {
+    quant_cols <- maxlfq_cols
+    suffix <- " MaxLFQ Intensity$"
+  } else {
+    quant_cols <- setdiff(grep(" Intensity$", cols, value = TRUE), maxlfq_cols)
+    suffix <- " Intensity$"
+  }
+  if (length(quant_cols) == 0) {
+    stop(safeError(paste0("No '<run>", gsub("\\$", "", suffix), "' columns found in the uploaded report. ",
+                          "Please choose another intensity type.")))
+  }
+
+  if (level == "protein") {
+    if ("Protein ID" %in% cols) { # combined_protein.tsv
+      required <- c("Protein", "Protein ID", "Entry Name", "Gene", "Description")
+    } else { # combined_gene.tsv
+      required <- c("Gene", "Proteins")
+    }
+  } else if (level == "peptide") {
+    required <- c("Protein", "Protein ID", "Gene", "Peptide Sequence")
+  } else {
+    required <- c("Index", "Protein", "Protein ID", "Gene", "Peptides", "Sequence Window")
+  }
+  missing_cols <- setdiff(required, cols)
+  if (length(missing_cols) > 0) {
+    stop(safeError(paste0("The uploaded report doesn't look like a FragPipe DIA combined_", level,
+                          ".tsv. Missing column(s): ", paste(missing_cols, collapse = ", "))))
+  }
+
+  if (contam_rm & "Protein" %in% cols) {
+    df <- df[!grepl("contam", df$Protein), ]
+  }
+
+  if (level == "protein" & "Protein ID" %in% cols) {
+    info <- data.frame(Protein.Group = df$`Protein ID`,
+                       Protein.Ids = df$`Protein ID`,
+                       Protein.Names = df$`Entry Name`,
+                       Genes = df$Gene,
+                       First.Protein.Description = df$Description)
+  } else if (level == "protein") { # genes are the features
+    info <- data.frame(Protein.Group = df$Gene,
+                       Protein.Ids = df$Proteins,
+                       Protein.Names = df$Gene,
+                       Genes = df$Gene,
+                       First.Protein.Description = "")
+  } else if (level == "peptide") {
+    info <- data.frame(Index = paste0(df$`Protein ID`, "_", df$`Peptide Sequence`),
+                       Gene = df$Gene,
+                       ProteinID = df$`Protein ID`,
+                       Peptide = df$`Peptide Sequence`)
+  } else {
+    info <- data.frame(Index = df$Index,
+                       Gene = df$Gene,
+                       ProteinID = df$`Protein ID`,
+                       Peptide = df$Peptides,
+                       SequenceWindow = df$`Sequence Window`)
+  }
+
+  quant <- df[, quant_cols, drop = FALSE]
+  colnames(quant) <- sub(suffix, "", quant_cols)
+  quant[] <- lapply(quant, as.numeric)
+  out <- cbind(info, quant)
+  rownames(out) <- NULL
+  return(out)
+}
+
+# FragPipe DIA reports name sample columns by run name only, while experiment_annotation.tsv
+# lists the full file path. Fall back to matching on the file name when the paths don't match.
+match_DIA_annotation_file <- function(files, sample_cols) {
+  if (any(files %in% sample_cols)) {
+    return(files)
+  }
+  base_names <- gsub(".*[\\\\/]", "", files)
+  for (run_names in list(base_names, sub("\\.[^.]+$", "", base_names))) {
+    if (any(run_names %in% sample_cols)) {
+      return(run_names)
+    }
+  }
+  return(files)
+}

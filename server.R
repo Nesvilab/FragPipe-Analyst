@@ -334,6 +334,11 @@ server <- function(input, output, session) {
         if (isTRUE(input$contam_rm)) {
           temp_data <- temp_data[!grepl("contam", temp_data$Protein),]
         }
+      } else if (input$exp %in% c("DIA", "DIA-peptide", "DIA-site") & is_fragdia_report(temp_data)) {
+        # FragPipe DIA combined_*.tsv
+        level <- c("DIA"="protein", "DIA-peptide"="peptide", "DIA-site"="site")[[input$exp]]
+        temp_data <- convert_fragdia_report(temp_data, level = level, intensity_type = input$dia_type,
+                                            contam_rm = isTRUE(input$contam_rm))
       } else if (input$exp == "DIA"){ # DIA
         validate(fragpipe_DIA_input_test(temp_data))
         if (isTRUE(input$contam_rm) & "Protein.Group" %in% colnames(temp_data)) {
@@ -678,8 +683,8 @@ server <- function(input, output, session) {
            data_unique <- make_unique(filtered_data, "ProteinID", "Index")
            level <- "site"
          } else if (input$exp == "DIA-peptide"){
-           if ("Best Precursor for Quant" %in% colnames(filtered_data)) {
-             data_unique <- make_unique(filtered_data, "ProteinID", "Index") 
+           if ("ProteinID" %in% colnames(filtered_data)) { # FragPipe peptide report
+             data_unique <- make_unique(filtered_data, "ProteinID", "Index")
            } else {
              data_unique <- make_unique(filtered_data, "Protein.Group", "Index") 
            }
@@ -704,6 +709,7 @@ server <- function(input, output, session) {
        } else if ((!any(grepl("\\.d$", colnames(data_unique)))) & any(grepl("\\.d$", exp_anno$file))) {
          exp_anno$file <- gsub(".*\\\\", "", gsub("\\.d$", "", exp_anno$file))
        }
+       exp_anno$file <- match_DIA_annotation_file(exp_anno$file, colnames(data_unique)[selected_cols])
        # make sure replicate column is not empty
        if (!all(is.na(exp_anno$replicate))) {
          exp_anno$label <- exp_anno$file
